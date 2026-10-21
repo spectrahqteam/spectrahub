@@ -18,7 +18,7 @@ svg{display:block;fill:none;stroke:currentColor}
 .brand-mark{width:22px;height:auto;aspect-ratio:20/15.2;fill:var(--ink);stroke:none}
 
 /* ===== MOBILE: logo on top, tiles one under another ===== */
-.map{flex:1;position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;align-items:center;padding:26px 16px 16px}
+.map{flex:1;position:relative;isolation:isolate;overflow:hidden;overflow:clip;display:flex;flex-direction:column;align-items:center;padding:26px 16px 16px}
 .map::before,.map::after{content:"";position:absolute;inset:0;z-index:-2;pointer-events:none;
   background-size:22px 22px;translate:calc(var(--mx,0) * -10px) calc(var(--my,0) * -10px);transition:translate .6s ease-out}
 .map::before{background-image:radial-gradient(circle,#2a2a2a 1.1px,transparent 1.5px);
@@ -129,7 +129,7 @@ svg{display:block;fill:none;stroke:currentColor}
 .tile:hover .rt svg{transform:scale(1.12);transition:transform .25s}
 
 /* drawings move only while their tile is on screen and the page is not being scrolled */
-.tile:not(.live) .art *,.tile:not(.live) .rim::before,.scrolling .art *{animation-play-state:paused!important}
+.tile:not(.live) .art *,.tile:not(.live) .rim::before{animation-play-state:paused!important}
 
 /* ----- drawings ----- */
 .art{display:block;height:38px;aspect-ratio:120/72;color:#6e6e6e;transition:color .35s ease,transform .35s ease}
@@ -196,6 +196,23 @@ svg{display:block;fill:none;stroke:currentColor}
   display:flex;flex-direction:column;gap:6px;font-size:9.5px;color:var(--dim)}
 .bottom a{color:var(--muted);word-break:break-all;transition:color .2s}
 .bottom a:hover{color:var(--ink)}
+
+/* ----- mobile scroll: tiles glide in from alternating sides and leave the same way ----- */
+@media (max-width:1023px) and (prefers-reduced-motion:no-preference){
+  .fan .tile{--side:-1}
+  .fan .tile:nth-child(even){--side:1}
+  @supports (animation-timeline:view()){
+    .fan .tile{animation:rise .6s cubic-bezier(.2,.7,.3,1) both,glideIn linear both,glideOut linear forwards;
+      animation-timeline:auto,view(),view();animation-range:normal,entry 0% entry 100%,exit 0% exit 100%}
+  }
+  /* no scroll timeline: hub.js toggles .away until the tile is on screen */
+  .fan .tile.away{translate:calc(var(--side) * 115%) 0;rotate:calc(var(--side) * 6deg)}
+  .fan .tile.glide{transition:translate .7s cubic-bezier(.2,.7,.3,1),rotate .7s cubic-bezier(.2,.7,.3,1),
+    border-color .3s ease,background .3s ease,transform .3s ease,box-shadow .3s ease}
+}
+@keyframes glideIn{from{translate:calc(var(--side) * 115%) 0;rotate:calc(var(--side) * 6deg)}
+  70%{translate:calc(var(--side) * -2%) 0;rotate:0deg}to{translate:0 0;rotate:0deg}}
+@keyframes glideOut{from{translate:0 0;rotate:0deg}to{translate:calc(var(--side) * -115%) 0;rotate:calc(var(--side) * -6deg)}}
 
 /* ===== WIDE PORTRAIT (640–1023): bigger type, tiles fill the screen ===== */
 @media (min-width:640px) and (max-width:1023px){

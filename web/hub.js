@@ -96,7 +96,7 @@ function el(name, attrs) {
 
 // Reveal each tile when its branch arrives; CSS delays cover no-JS.
 function revealAt(tile, ms) {
-  tile.style.animationDelay = `${Math.round(ms)}ms`;
+  tile.style.animationDelay = `${Math.round(ms)}ms, 0s, 0s`;
 }
 
 // Mobile sizes the tiles so the first screen holds the mark and the first rows (see .fan --rows).
@@ -168,7 +168,7 @@ let last = 0;
 function frame(now) {
   const dt = last ? Math.min(64, now - last) : 16;
   last = now;
-  if (now >= startAt && !scrolling) {
+  if (now >= startAt) {
     const top = map.getBoundingClientRect().top;
     for (const c of comets) {
       if (c.y0 + top > innerHeight + 40 || c.y1 + top < -40) continue;
@@ -201,18 +201,23 @@ for (const tile of tiles) {
   tile.addEventListener('blur', () => setHot(null));
 }
 
-// Only tiles on screen animate their drawings; nothing ticks while the page is scrolling.
+// Only tiles on screen animate their drawings.
 const io = new IntersectionObserver((entries) => {
   for (const e of entries) e.target.classList.toggle('live', e.isIntersecting);
 });
 for (const t of tiles) io.observe(t);
-let scrolling = false;
-let scrollTimer = 0;
-addEventListener('scroll', () => {
-  if (!scrolling) { scrolling = true; document.documentElement.classList.add('scrolling'); }
-  clearTimeout(scrollTimer);
-  scrollTimer = setTimeout(() => { scrolling = false; document.documentElement.classList.remove('scrolling'); }, 160);
-}, { passive: true });
+
+// Mobile without scroll timelines: tiles below the first screen glide in once a fifth of them shows.
+if (!CSS.supports('animation-timeline: view()') && !reduce.matches) {
+  const glide = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (desktop.matches) { e.target.classList.remove('away'); continue; }
+      e.target.classList.add('glide');
+      e.target.classList.toggle('away', !e.isIntersecting);
+    }
+  }, { threshold: 0.2 });
+  for (const t of tiles) glide.observe(t);
+}
 
 // The dots light up around the pointer or finger, and drift a little with the mouse.
 let spotTimer = 0;
