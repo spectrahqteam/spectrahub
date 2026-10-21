@@ -157,6 +157,13 @@ test('sessions are listed and survive on disk', async () => {
   assert.equal(sessions[0].title, 'test');
 });
 
+test('an unnamed session is named after its first line', async () => {
+  const { session } = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ agents: ['claude'] }) })).json();
+  await api(`/api/sessions/${session.id}/send`, { method: 'POST', body: JSON.stringify({ to: ['claude'], text: '  sprawdź   dysk na serwerze  ' }) });
+  const s = await waitIdle(session.id);
+  assert.equal(s.title, 'sprawdź dysk na serwerze');
+});
+
 test('adapters turn each runtime events into the same steps', async () => {
   const { adapters } = await import('../src/agents.js');
   const run = (a, lines, method = 'line') => {

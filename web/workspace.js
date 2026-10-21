@@ -458,6 +458,11 @@ function onEvent(e) {
   } else if (e.type === 'end') {
     const d = chat.entries.get(e.n);
     if (d) stick(() => finish(d, e.status, e.error));
+  } else if (e.type === 'title') {
+    s.title = e.title;
+    titleEl.textContent = crumb.textContent = e.title;
+    renderStatus();
+    loadSessions();
   } else if (e.type === 'state') {
     if (s.agents[e.agent]) s.agents[e.agent].state = e.state;
     renderComposer();
@@ -641,7 +646,6 @@ async function openStart() {
   }
   if (!ready.length) pick.append(el('p', 'p-note', 'Nie znaleziono agenta, którego da się uruchomić. Zainstaluj Claude Code, Codex albo OpenClaw i zeskanuj ponownie.'));
   $('startGo').disabled = !ready.length;
-  $('startTitle').value = '';
   if (!dlg.open) dlg.showModal();
 }
 $('startForm').addEventListener('submit', async (e) => {
@@ -649,7 +653,7 @@ $('startForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const picked = [...dlg.querySelectorAll('.pick input:checked')].map((i) => i.value);
   if (!picked.length) return;
-  const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ agents: picked, title: $('startTitle').value }) });
+  const res = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ agents: picked }) });
   dlg.close();
   if (!res.ok) { chatLine('nie udało się otworzyć sesji', 'err'); return; }
   const { session } = await res.json();

@@ -63,6 +63,7 @@ export async function createSession(config, { agents, title }) {
   const s = {
     id: randomUUID().slice(0, 13),
     title: String(title || '').trim().slice(0, 80) || `sesja ${now.slice(0, 16).replace('T', ' ')}`,
+    autoTitle: !String(title || '').trim(),
     createdAt: now,
     updatedAt: now,
     cwd: config.agents?.cwd ?? config.terminal?.cwd ?? process.cwd(),
@@ -109,6 +110,12 @@ export async function send(config, id, { to, text }) {
   if (busy.length) return { error: `busy: ${busy.join(', ')}`, code: 409 };
   const runtimes = await scan();
   const mine = add(config, s, { who: 'you', to: targets, s: text });
+  if (s.autoTitle) {  // an unnamed session takes its name from the first line
+    const t = text.replace(/\s+/g, ' ').trim();
+    s.title = t.length > 48 ? t.slice(0, 47).trimEnd() + '…' : t;
+    s.autoTitle = false;
+    publish(s.id, { type: 'title', title: s.title });
+  }
   mine.done = mine.at;
 
   for (const agent of targets) {

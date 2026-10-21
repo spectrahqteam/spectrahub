@@ -190,6 +190,7 @@
 .dlg-btns button{font:inherit;font-size:12px;border-radius:9px;padding:9px 16px;cursor:pointer}
 .dlg-btns .ghost{background:none;color:var(--muted);border:1px solid var(--line-hi)}
 .dlg-btns .go{background:var(--ink);color:#000;border:0}
+.dlg-btns .go:disabled{opacity:.35;cursor:default}
 
 /* runtime marks next to agents */
 svg.mark{display:inline-block;width:1em;height:1em;vertical-align:-.15em;margin-right:.4em;fill:currentColor;stroke:none;flex:0 0 auto}
