@@ -86,7 +86,7 @@ test('anything off the list is denied, including shell tricks', async () => {
 test('the terminal page is served without its extension', async () => {
   const res = await fetch(`${base}/terminal`);
   assert.equal(res.status, 200);
-  assert.match(await res.text(), /workspace\.js/);
+  assert.match(await res.text(), /app\.js/);
 });
 
 test('a login link code buys the token once, then dies', async () => {

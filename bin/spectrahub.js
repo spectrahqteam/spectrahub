@@ -127,7 +127,7 @@ Usage: spectrahub <command> [options]
     const port = flag('port', null);
     if (port) config.server.port = Number(port);
     const server = await start(config);
-    import('../src/agents.js').then((m) => m.models()).catch(() => {});  // warm the model list (some CLIs are slow)
+    import('../src/agents.js').then((m) => m.models({ wait: true })).catch(() => {});  // warm the model list (some CLIs are slow)
     const addr = `http://${config.server.host}:${config.server.port}`;
     console.log(`spectrahub ${VERSION} listening on ${addr}`);
     const stop = () => server.close(() => process.exit(0));

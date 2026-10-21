@@ -148,9 +148,6 @@ async function doScan() {
 // ---------- models: what each runtime offers right now, read from the runtime itself ----------
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const OPENCLAW_THINKING = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'adaptive', 'max'];
-let catalog = null;
-let catalogAt = 0;
-let catalogFlight = null;
 
 function jsonFile(file) {
   try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
@@ -215,20 +212,40 @@ async function openclawModels(rt) {
 // Runtimes that only take their model from their own configuration say so.
 const MODEL_SOURCES = { claude: claudeModels, codex: codexModels, openclaw: openclawModels };
 
-export async function models({ fresh = false } = {}) {
-  if (catalog && !fresh && Date.now() - catalogAt < 10 * 60_000) return catalog;
-  catalogFlight ??= (async () => {
-    const out = {};
-    for (const rt of (await scan()).filter((r) => r.ready)) {
-      const src = MODEL_SOURCES[rt.id];
-      try { out[rt.id] = src ? await src(rt) : { configurable: false, models: [], note: 'model ustawia sam agent' }; }
-      catch { out[rt.id] = { configurable: false, models: [], note: 'nie udało się odczytać modeli' }; }
+// Each runtime's list is read on its own and cached; a slow CLI never holds up the others.
+// Returns what is ready now, with `pending` naming the runtimes still being read.
+const modelCache = new Map();   // id -> { at, value }
+const modelFlight = new Map();  // id -> promise
+
+function loadModelsOf(rt) {
+  if (modelFlight.has(rt.id)) return modelFlight.get(rt.id);
+  const src = MODEL_SOURCES[rt.id];
+  const p = (async () => {
+    try { return src ? await src(rt) : { configurable: false, models: [], note: 'model ustawia sam agent' }; }
+    catch { return { configurable: false, models: [], note: 'nie udało się odczytać modeli' }; }
+  })().then((value) => { modelCache.set(rt.id, { at: Date.now(), value }); return value; })
+    .finally(() => modelFlight.delete(rt.id));
+  modelFlight.set(rt.id, p);
+  return p;
+}
+
+export async function models({ fresh = false, wait = false } = {}) {
+  const ready = (await scan()).filter((r) => r.ready);
+  const out = {};
+  const pending = [];
+  for (const rt of ready) {
+    const c = modelCache.get(rt.id);
+    if (!c || fresh || Date.now() - c.at > 10 * 60_000) {
+      const p = loadModelsOf(rt);
+      if (wait || !c) { if (wait) out[rt.id] = await p; else pending.push(rt.id); }
     }
-    catalog = out;
-    catalogAt = Date.now();
-    return out;
-  })().finally(() => { catalogFlight = null; });
-  return catalogFlight;
+    if (!out[rt.id] && modelCache.get(rt.id)) out[rt.id] = modelCache.get(rt.id).value;
+  }
+  // Claude's list needs no CLI call: give it at once rather than waiting for the next request.
+  for (const id of [...pending]) {
+    if (MODEL_SOURCES[id] === claudeModels) { out[id] = await modelFlight.get(id) ?? modelCache.get(id)?.value; pending.splice(pending.indexOf(id), 1); }
+  }
+  return pending.length ? { ...out, _pending: pending } : out;
 }
 
 const short = (s, n = 160) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
