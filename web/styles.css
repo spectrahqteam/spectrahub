@@ -8,101 +8,141 @@ body{min-height:100dvh;background:radial-gradient(120% 80% at 50% 0%,#0d0c0b,#0a
 a{color:inherit;text-decoration:none}
 svg{display:block;fill:none;stroke:currentColor}
 .dot{width:6px;height:6px;border-radius:50%;display:inline-block;flex:0 0 6px}
-.dot.ok{background:var(--ok)}
+.dot.ok{background:var(--ok);animation:pulseDot 3.4s ease-in-out infinite}
+@keyframes pulseDot{0%,100%{box-shadow:0 0 0 0 rgba(143,174,143,.45)}50%{box-shadow:0 0 0 4px rgba(143,174,143,0)}}
 
 .top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
   padding:13px 16px;border-bottom:1px solid var(--line);background:var(--bar);font-size:11px}
 .brand{color:var(--ink-hi);letter-spacing:.12em;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.brand .prompt{color:var(--accent)}
+.brand .prompt{color:var(--accent);animation:blinkSoft 5s steps(1,end) infinite}
+@keyframes blinkSoft{0%,92%,100%{opacity:1}95%{opacity:.35}}
 .brand .dim{color:var(--muted);letter-spacing:.04em;font-size:10px}
 .meta{color:var(--dim);font-size:10px;display:flex;align-items:center;gap:7px;white-space:nowrap}
 .meta .sep{color:var(--dim2)}
 
+/* scena mobilna: logo, potem 5 kafli jeden pod drugim */
 .map{flex:1;display:flex;flex-direction:column;align-items:center;padding:34px 16px 0}
-
-/* logo */
-.core{text-align:center;display:flex;flex-direction:column;align-items:center}
+.rowtop{display:contents}
+.core{order:0;text-align:center;display:flex;flex-direction:column;align-items:center}
 .mark{position:relative;width:68px;height:68px;display:grid;place-items:center;border:1px solid #241f1c;
-  border-radius:17px;background:#0d0c0b;animation:breathe 7s ease-in-out infinite}
-.mark::after{content:"";position:absolute;inset:-1px;border-radius:17px;
-  box-shadow:0 0 0 0 rgba(217,119,87,0);animation:glow 7s ease-in-out infinite}
-.mark svg{width:38px;height:38px;fill:var(--ink-hi);stroke:none}
+  border-radius:17px;background:#0d0c0b;animation:breathe 7s ease-in-out infinite,float 9s ease-in-out infinite}
+.mark::before{content:"";position:absolute;inset:-14px;border-radius:26px;pointer-events:none;
+  background:conic-gradient(from 0deg,rgba(217,119,87,0),rgba(217,119,87,.22),rgba(217,119,87,0) 42%);
+  filter:blur(9px);opacity:.55;animation:spin 14s linear infinite}
+.mark svg{width:38px;height:38px;fill:var(--ink-hi);stroke:none;position:relative}
 @keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
-@keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(217,119,87,0)}
-  50%{box-shadow:0 0 26px 2px rgba(217,119,87,.16)}}
+@keyframes float{0%,100%{translate:0 0}50%{translate:0 -5px}}
+@keyframes spin{to{rotate:360deg}}
 .core h1{font-size:15px;letter-spacing:.24em;color:var(--ink-hi);font-weight:500;margin-top:18px}
 .core .tag{font-size:9px;letter-spacing:.18em;color:var(--dim);margin-top:8px;text-transform:uppercase}
 
-/* pień */
-.stem{width:1px;height:40px;background:linear-gradient(to bottom,transparent,var(--wire));
+.stem{order:1;width:1px;height:40px;background:linear-gradient(to bottom,transparent,var(--wire));
   position:relative;margin-top:22px;transform-origin:top;animation:grow 700ms 120ms ease-out both}
-.stem i{position:absolute;left:-2px;bottom:-2px;width:5px;height:5px;border-radius:50%;
-  background:var(--accent);animation:pop 500ms 650ms ease-out both}
+.stem i{position:absolute;left:-2px;bottom:-2px;width:5px;height:5px;border-radius:50%;background:var(--accent);
+  animation:pop 500ms 650ms ease-out both,travel 3.6s 1.2s ease-in-out infinite}
 @keyframes grow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
 @keyframes pop{from{opacity:0;transform:scale(.4)}to{opacity:1;transform:scale(1)}}
+@keyframes travel{0%,100%{bottom:-2px;opacity:.9}50%{bottom:calc(100% - 3px);opacity:.35}}
 
-/* odnogi */
-.fan{display:flex;flex-direction:column;gap:10px;width:100%;padding-top:20px}
-.branch{border:1px solid var(--line);border-radius:9px;background:#0c0b0a;padding:13px 14px;
-  display:flex;flex-direction:column;gap:7px;position:relative;
-  animation:rise 520ms cubic-bezier(.2,.7,.3,1) both;animation-delay:calc(220ms + var(--i) * 80ms)}
-.branch::before{content:"";position:absolute;left:50%;top:-20px;width:1px;height:20px;background:var(--wire);
-  animation:fade 400ms ease-out both;animation-delay:calc(180ms + var(--i) * 80ms)}
-.branch:first-child::before{display:none}
-.branch:active{transform:scale(.995)}
-@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-@keyframes fade{from{opacity:0}to{opacity:1}}
+.fan{order:4;display:flex;flex-direction:column;gap:10px;width:100%;padding-top:20px}
+.wing{order:2}
+.wing + .wing{order:3}
+
+.tile{border:1px solid var(--line);border-radius:9px;background:#0c0b0a;padding:13px 14px;
+  display:flex;flex-direction:column;gap:7px;position:relative;overflow:hidden;
+  animation:rise 560ms cubic-bezier(.2,.7,.3,1) both;animation-delay:calc(200ms + var(--i) * 90ms);
+  transition:border-color .2s ease,background .2s ease,transform .2s ease}
+.tile::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:0;
+  background:linear-gradient(115deg,transparent 35%,rgba(217,119,87,.09) 50%,transparent 65%);
+  transform:translateX(-60%);transition:opacity .2s ease}
+.tile:hover::after{opacity:1;animation:sheen 1.1s ease-out}
+.tile:hover{border-color:#3a332e;background:#0e0d0c;transform:translateY(-2px)}
+.tile:active{transform:translateY(0) scale(.997)}
+@keyframes sheen{from{transform:translateX(-60%)}to{transform:translateX(60%)}}
+@keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 
 .nhead{display:flex;align-items:center;gap:9px;font-size:11.5px;letter-spacing:.14em;color:var(--ink-hi)}
 .nico{width:20px;height:20px;display:grid;place-items:center;border:1px solid #242120;border-radius:5px;
-  color:var(--muted);font-size:10px;letter-spacing:0}
+  color:var(--muted);font-size:10px;letter-spacing:0;transition:color .2s,border-color .2s,transform .2s}
+.tile:hover .nico{color:var(--accent);border-color:#3d332a;transform:scale(1.08)}
 .nhead .prompt{color:var(--accent);width:20px;text-align:center;letter-spacing:0}
 .nmeta{display:flex;flex-wrap:wrap;gap:10px;font-size:10px;color:var(--muted)}
 .nsub{font-size:9.5px;color:var(--dim)}
 
-/* runtime'y z oficjalnymi znakami */
 .runtimes{display:flex;flex-wrap:wrap;gap:12px;font-size:10px;color:var(--muted);align-items:center}
-.rt{display:flex;align-items:center;gap:6px}
-.rt svg{width:13px;height:13px;color:var(--c);fill:currentColor;stroke:none;flex:0 0 13px}
+.rt{display:flex;align-items:center;gap:6px;transition:color .2s}
+.tile:hover .rt{color:#a9a29c}
+.rt svg{width:13px;height:13px;color:var(--c);fill:currentColor;stroke:none;flex:0 0 13px;
+  animation:nudge 6s ease-in-out infinite}
+.rt:nth-child(1) svg{animation-delay:.2s}
+.rt:nth-child(2) svg{animation-delay:.8s}
+.rt:nth-child(3) svg{animation-delay:1.4s}
+.rt:nth-child(4) svg{animation-delay:2s}
 .rt svg.stroke{fill:none;stroke:currentColor;stroke-width:1.4;stroke-linejoin:round;stroke-linecap:round}
+@keyframes nudge{0%,88%,100%{transform:scale(1)}94%{transform:scale(1.14)}}
+.tile:hover .rt svg{animation:none;transform:scale(1.16)}
 
 .bottom{margin-top:auto;padding:18px 16px 14px;border-top:1px solid var(--line);
   display:flex;flex-direction:column;gap:6px;font-size:9.5px;color:var(--dim2)}
-.bottom a{color:var(--muted);word-break:break-all}
+.bottom a{color:var(--muted);word-break:break-all;transition:color .2s}
+.bottom a:hover{color:var(--accent)}
 
 @media (prefers-reduced-motion:reduce){
-  .mark,.mark::after,.stem,.stem i,.branch,.branch::before{animation:none!important}
+  .mark,.mark::before,.stem,.stem i,.tile,.tile::after,.rt svg,.dot.ok,.brand .prompt{animation:none!important}
+  .tile:hover{transform:none}
 }
 
-/* desktop: duża scena, 5 odnóg, więcej powietrza */
+/* DESKTOP: dwa duże kafle po bokach logo, trzy pod spodem */
 @media (min-width:960px){
   body{height:100dvh;overflow:hidden}
   .top{padding:15px 30px;font-size:11.5px}
-  .map{justify-content:center;padding:0 44px}
-  .core .mark{width:118px;height:118px;border-radius:26px}
-  .mark svg{width:66px;height:66px}
-  .core h1{font-size:21px;letter-spacing:.3em;margin-top:26px}
-  .core .tag{font-size:10.5px;margin-top:11px}
-  .stem{height:76px;margin-top:10px}
-  .fan{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;width:min(1460px,100%);
+  .map{justify-content:center;padding:0 40px}
+  .rowtop{display:flex;align-items:center;justify-content:center;width:100%;order:0}
+  .core{padding:0 34px;flex:0 0 auto}
+  .mark{width:112px;height:112px;border-radius:26px}
+  .mark::before{inset:-20px;border-radius:34px}
+  .mark svg{width:62px;height:62px}
+  .core h1{font-size:20px;letter-spacing:.3em;margin-top:24px}
+  .core .tag{font-size:10px;margin-top:10px}
+
+  .wire{display:block;width:72px;height:1px;background:var(--wire);position:relative;flex:0 0 72px;
+    transform-origin:center;animation:spread 800ms 260ms cubic-bezier(.2,.7,.3,1) both}
+  .wire::after{content:"";position:absolute;top:-2px;width:5px;height:5px;border-radius:50%;
+    background:var(--accent);animation:pop 500ms 900ms ease-out both}
+  .wire.wl::after{right:-1px}
+  .wire.wr::after{left:-1px}
+  .wire i{position:absolute;top:-1px;width:14px;height:3px;border-radius:2px;
+    background:linear-gradient(90deg,transparent,var(--accent));opacity:.55;
+    animation:flow 4.5s linear infinite}
+  .wire.wl i{animation-direction:reverse}
+  @keyframes flow{from{left:-14px}to{left:100%}}
+
+  .wing{flex:1 1 0;max-width:420px;min-height:170px;padding:22px 22px;justify-content:center}
+  .wing .nhead{font-size:13px}
+  .wing .nico{width:26px;height:26px;font-size:12px;border-radius:6px}
+  .wing .nmeta{font-size:11px;gap:12px}
+
+  .stem{order:1;height:70px;margin-top:8px}
+  .fan{order:2;display:grid;grid-template-columns:repeat(3,1fr);gap:20px;width:min(1240px,100%);
     padding-top:44px;position:relative;margin:0 auto}
-  .fan::before{content:"";position:absolute;left:10%;right:10%;top:0;height:1px;background:var(--wire);
-    transform-origin:center;animation:spread 800ms 250ms cubic-bezier(.2,.7,.3,1) both}
+  .fan::before{content:"";position:absolute;left:16.66%;right:16.66%;top:0;height:1px;background:var(--wire);
+    transform-origin:center;animation:spread 900ms 320ms cubic-bezier(.2,.7,.3,1) both}
   @keyframes spread{from{transform:scaleX(0)}to{transform:scaleX(1)}}
-  .branch{padding:18px 17px;min-height:132px;justify-content:flex-start;gap:10px}
-  .branch::before{top:-44px;height:44px}
-  .branch:first-child::before{display:block}
-  .nhead{font-size:12px}
-  .nico{width:22px;height:22px;font-size:11px}
-  .nmeta{font-size:10.5px;gap:8px}
-  .branch:hover{border-color:#3a332e;background:#0e0d0c}
-  .branch{transition:border-color .18s ease,background .18s ease}
-  .branch:hover{animation:none}
-  .rt svg{width:15px;height:15px;flex-basis:15px}
+  .branch{min-height:150px;padding:20px 20px;justify-content:flex-start;gap:11px}
+  .branch::before{content:"";position:absolute;left:50%;top:-44px;width:1px;height:44px;background:var(--wire);
+    transform-origin:top;animation:grow 500ms ease-out both;animation-delay:calc(420ms + var(--i) * 60ms)}
+  .branch .nhead{font-size:13px}
+  .branch .nmeta{font-size:11px}
+  .rt svg{width:16px;height:16px;flex-basis:16px}
+
   .bottom{flex-direction:row;justify-content:space-between;align-items:center;padding:14px 30px}
 }
-@media (min-width:960px) and (max-width:1280px){
-  .fan{gap:12px}
-  .core .mark{width:96px;height:96px;border-radius:22px}
-  .mark svg{width:54px;height:54px}
+@media (min-width:960px) and (max-width:1180px){
+  .core{padding:0 22px}
+  .mark{width:92px;height:92px;border-radius:22px}
+  .mark svg{width:50px;height:50px}
+  .wire{width:52px;flex-basis:52px}
+  .wing{padding:18px;min-height:150px}
+  .branch{min-height:132px;padding:17px}
+  .fan{gap:14px}
 }
