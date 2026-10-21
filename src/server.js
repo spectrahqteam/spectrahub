@@ -6,6 +6,8 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VERSION, paths, defaultDir } from './config.js';
 import { authorize, createPairing, redeemPairing, runLine, terminalInfo } from './terminal.js';
+import { scan } from './agents.js';
+import { createSession, getSession, listSessions, send as sendTo, stop as stopRun, subscribe } from './sessions.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const WEB = join(ROOT, 'web');
@@ -113,7 +115,7 @@ function readBody(req, limit = 4096) {
   });
 }
 
-// Terminal routes answer only the owner: 403 until a token exists, 401 on a wrong one.
+// Owner routes (terminal, agents, sessions): 403 until a token exists, 401 on a wrong one.
 async function terminalRoute(req, res, url, config) {
   const dir = config.dir ?? defaultDir();
   const json = (code, body) => send(res, code, JSON.stringify(body), 'application/json; charset=utf-8');
@@ -127,6 +129,10 @@ async function terminalRoute(req, res, url, config) {
   const auth = authorize(req, dir);
   if (auth === 'disabled') return send(res, 403, JSON.stringify({ error: 'terminal disabled', hint: 'spectrahub token' }), 'application/json; charset=utf-8');
   if (auth !== 'ok') return send(res, 401, JSON.stringify({ error: 'unauthorized' }), 'application/json; charset=utf-8');
+  if (url.pathname === '/api/agents' && req.method === 'GET') {
+    return json(200, { agents: await scan({ fresh: url.searchParams.has('fresh') }) });
+  }
+  if (url.pathname.startsWith('/api/sessions')) return sessionRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname === '/api/terminal/pair/new' && req.method === 'POST') {
     return json(200, { code: createPairing(dir), ttlMinutes: 15 });
   }
@@ -138,6 +144,51 @@ async function terminalRoute(req, res, url, config) {
     try { line = JSON.parse(await readBody(req)).line; } catch { return send(res, 400, 'bad request'); }
     if (typeof line !== 'string') return send(res, 400, 'bad request');
     return runLine(config, line, res);
+  }
+  return send(res, 404, 'not found');
+}
+
+// Work sessions with agents. Events stream as SSE over a GET that carries the token header.
+async function sessionRoute(req, res, url, config, json) {
+  const body = async () => { try { return JSON.parse(await readBody(req, 64 * 1024)); } catch { return null; } };
+  const parts = url.pathname.split('/').filter(Boolean);  // api, sessions, :id, :action
+  const [, , id, action] = parts;
+  if (!id) {
+    if (req.method === 'GET') return json(200, { sessions: listSessions(config) });
+    if (req.method === 'POST') {
+      const b = await body();
+      if (!b || !Array.isArray(b.agents)) return send(res, 400, 'bad request');
+      const r = await createSession(config, b);
+      return r.error ? json(400, r) : json(201, r);
+    }
+    return send(res, 405, 'method not allowed');
+  }
+  const s = getSession(config, id);
+  if (!s) return json(404, { error: 'no such session' });
+  if (!action && req.method === 'GET') return json(200, { session: s });
+  if (action === 'send' && req.method === 'POST') {
+    const b = await body();
+    if (!b || typeof b.text !== 'string' || !b.text.trim() || !Array.isArray(b.to)) return send(res, 400, 'bad request');
+    const r = await sendTo(config, id, { to: b.to, text: b.text.slice(0, 20000) });
+    return r.error ? json(r.code ?? 400, r) : json(202, r);
+  }
+  if (action === 'stop' && req.method === 'POST') {
+    const b = (await body()) ?? {};
+    return json(200, { stopped: stopRun(config, id, b.agent) });
+  }
+  if (action === 'events' && req.method === 'GET') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Accel-Buffering': 'no',
+      Connection: 'keep-alive',
+    });
+    const write = (e) => res.write(`data: ${JSON.stringify(e)}\n\n`);
+    write({ type: 'snapshot', session: s });
+    const off = subscribe(id, write);
+    const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
+    req.on('close', () => { off(); clearInterval(ping); });
+    return;
   }
   return send(res, 404, 'not found');
 }
@@ -159,7 +210,7 @@ export function createServer(config) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
     }
-    if (url.pathname.startsWith('/api/terminal/')) return terminalRoute(req, res, url, config);
+    if (/^\/api\/(terminal\/|agents$|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
     return serveStatic(res, url.pathname);
   });
