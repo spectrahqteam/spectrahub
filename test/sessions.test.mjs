@@ -74,7 +74,8 @@ test('the scanner reports what is installed and what can be driven', async () =>
   assert.equal(claude.ready, true);
   assert.match(claude.version, /fake/);
   assert.equal(agents.find((a) => a.id === 'codex').installed, false);
-  assert.deepEqual(agents.map((a) => a.id).sort(), ['claude', 'codex', 'deepseek', 'hermes', 'openclaw']);
+  assert.deepEqual(agents.map((a) => a.id).sort(), ['claude', 'codex', 'dsh', 'openclaw']);
+  assert.ok(agents.every((a) => !('launch' in JSON.parse(JSON.stringify(a)))), 'launch details stay on the server');
 });
 
 test('a session starts only with agents that are ready', async () => {

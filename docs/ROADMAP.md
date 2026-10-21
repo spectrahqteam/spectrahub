@@ -14,7 +14,7 @@
 ## 0.3.0 — terminal and chat (brief: `docs/BRIEF-terminal-chat.md`)
 - [x] read-only terminal: exact command allowlist, SSE stream, Ubuntu-like prompt, owner token
 - [x] workspace: rail + panel + window (rail fixed on phones, panel slides over)
-- [x] agent scanner (Claude Code, Codex, OpenClaw; Hermes and DeepSeek detected)
+- [x] agent scanner (Claude Code, Codex, OpenClaw, DeepSeek Harness) — PATH, running systemd units, install folders
 - [x] "start sesja": pick agents, each gets a new runtime session, one shared conversation
 - [x] chat in the terminal window: `@agent` picks and keeps the recipient, `@all`, `/stop`, streamed replies
 - [ ] inline approval cards (TAK / NIE in the stream)

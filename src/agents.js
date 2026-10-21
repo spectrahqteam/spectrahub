@@ -2,17 +2,21 @@
 // Every adapter keeps the runtime's own session, so the next turn continues the same conversation.
 import { spawn, execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync, constants, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { basename, delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-// What the scanner looks for. `adapter: false` means we can see it but cannot drive it yet.
+// What the scanner looks for: commands on PATH, then systemd units that already run the agent
+// (so we start it exactly as the host does), then usual install folders.
+// `adapter: false` means we can see it but cannot drive it yet.
 const RUNTIMES = [
   { id: 'claude', label: 'Claude Code', bins: ['claude'], adapter: true },
   { id: 'codex', label: 'Codex', bins: ['codex'], adapter: true },
   { id: 'openclaw', label: 'OpenClaw', bins: ['openclaw'], adapter: true },
-  { id: 'hermes', label: 'Hermes', bins: ['hermes'], adapter: false },
-  { id: 'deepseek', label: 'DeepSeek', bins: ['deepseek', 'deepseek-cli'], adapter: false },
+  // DeepSeek Harness, also known as Hermes on some installs.
+  { id: 'dsh', label: 'DeepSeek Harness', bins: ['dsh', 'deepseek-harness', 'hermes'], units: ['dsh.service', 'hermes.service'],
+    scripts: ['/opt/dsh/apps/cli/lib/bin.js', '/usr/lib/node_modules/@deepseek-ai/dsh/lib/bin.js', '/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js'],
+    adapter: true },
 ];
 
 function which(bin) {
@@ -29,6 +33,40 @@ function run(bin, args, ms = 8000) {
   });
 }
 
+// systemd unit → how it starts the agent: the node script, its folder, environment and env file.
+async function fromUnit(unit) {
+  const show = await run('systemctl', ['show', unit, '-p', 'ExecStart', '-p', 'WorkingDirectory', '-p', 'Environment', '-p', 'EnvironmentFiles', '-p', 'LoadState']);
+  if (!/LoadState=loaded/.test(show)) return null;
+  const exec = /argv\[\]=([^;]+);/.exec(show)?.[1]?.trim().split(/\s+/) ?? [];
+  const script = exec.find((a) => a.endsWith('.js'));
+  if (!script || !existsSync(script)) return null;
+  const env = {};
+  for (const pair of (/^Environment=(.*)$/m.exec(show)?.[1] ?? '').split(/\s+/)) {
+    const i = pair.indexOf('=');
+    if (i > 0) env[pair.slice(0, i)] = pair.slice(i + 1);
+  }
+  return {
+    node: exec[0]?.endsWith('node') ? exec[0] : process.execPath,
+    script,
+    cwd: /^WorkingDirectory=(.+)$/m.exec(show)?.[1] || null,
+    env,
+    envFile: /^EnvironmentFiles=(\S+)/m.exec(show)?.[1] || null,
+    unit,
+  };
+}
+
+// KEY=value lines; values never leave the server, they only reach the agent's own process.
+function readEnvFile(file) {
+  const env = {};
+  try {
+    for (const line of readFileSync(file, 'utf8').split('\n')) {
+      const m = /^\s*(?:export\s+)?([A-Za-z_][\w]*)\s*=\s*(.*)\s*$/.exec(line);
+      if (m) env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+    }
+  } catch { /* unreadable: the agent starts without it */ }
+  return env;
+}
+
 let cache = null;
 let cachedAt = 0;
 
@@ -36,10 +74,23 @@ let cachedAt = 0;
 export async function scan({ fresh = false } = {}) {
   if (cache && !fresh && Date.now() - cachedAt < 60_000) return cache;
   const found = await Promise.all(RUNTIMES.map(async (r) => {
-    const path = r.bins.map(which).find(Boolean) ?? null;
-    const out = { id: r.id, label: r.label, installed: Boolean(path), ready: Boolean(path) && r.adapter, path, version: null };
-    if (!path) return out;
-    out.version = (await run(path, ['--version'])).split('\n')[0].trim() || null;
+    let path = r.bins.map(which).find(Boolean) ?? null;
+    let launch = null;  // node script run as the host runs it
+    for (const unit of path ? [] : r.units ?? []) { launch = await fromUnit(unit); if (launch) break; }
+    if (!path && !launch) {
+      const script = (r.scripts ?? []).find((f) => existsSync(f));
+      if (script) launch = { node: process.execPath, script, cwd: null, env: {}, envFile: null, unit: null };
+    }
+    const out = { id: r.id, label: r.label, installed: Boolean(path || launch), ready: Boolean(path || launch) && r.adapter, path: path ?? launch?.script ?? null, version: null };
+    if (!out.installed) return out;
+    if (launch) {
+      out.via = launch.unit ? `usługa ${launch.unit}` : 'katalog instalacji';
+      if (launch.cwd) out.workspace = launch.cwd;
+      Object.defineProperty(out, 'launch', { value: launch, enumerable: false });  // never sent to the browser
+    }
+    const version = launch ? run(launch.node, [launch.script, '--version'], 15000) : run(path, ['--version']);
+    out.version = (await version).split('\n')[0].trim() || null;
+    if (r.id === 'dsh' && launch?.cwd) out.agent = basename(launch.cwd).toLowerCase();
     if (r.id === 'openclaw') {
       const list = await run(path, ['agents', 'list'], 15000);
       out.agent = /^- (\S+) \(default\)/m.exec(list)?.[1] ?? /^- (\S+)/m.exec(list)?.[1] ?? null;
@@ -100,6 +151,25 @@ const codex = {
   },
 };
 
+// DeepSeek Harness: the headless profile writes run events; the session id continues the talk.
+const dsh = {
+  argv(ref, started) {
+    return ['--profile', 'headless', '--json', ...(started ? ['--session-id', ref] : []), '-'];
+  },
+  stdin: true,
+  line(d, emit) {
+    if (d.type === 'session') emit({ type: 'ref', ref: d.sessionId });
+    else if (d.type === 'text' && d.text) { this.said = true; emit({ type: 'text', s: d.text }); }
+    else if (d.type === 'final' && d.text && !this.said) emit({ type: 'text', s: d.text, block: true });
+    else if (/tool/.test(d.type ?? '')) emit({ type: 'tool', s: short(`${d.name ?? d.tool ?? d.type} ${d.input?.command ?? d.input?.path ?? d.summary ?? ''}`.trim()) });
+    else if (d.type === 'error') emit({ type: 'error', s: String(d.message ?? d.error ?? 'error') });
+    else if (d.type === 'status' && d.phase === 'turn_end') {
+      if (d.reason?.kind && d.reason.kind !== 'completed') emit({ type: 'error', s: `tura zakończona: ${d.reason.kind}` });
+      emit({ type: 'done' });
+    }
+  },
+};
+
 // OpenClaw: one JSON document at the end; the reply stays here, nothing is delivered to channels.
 const openclaw = {
   argv(ref, _started, { agent, file }) {
@@ -115,15 +185,15 @@ const openclaw = {
   },
 };
 
-const ADAPTERS = { claude, codex, openclaw };
+const ADAPTERS = { claude, codex, openclaw, dsh };
 
 export function newRef(id) {
-  return id === 'codex' ? null : id === 'openclaw' ? `spectrahub-${randomUUID()}` : randomUUID();
+  return id === 'codex' || id === 'dsh' ? null : id === 'openclaw' ? `spectrahub-${randomUUID()}` : randomUUID();
 }
 
 // Runs one turn. `emit` receives {type: text|tool|error|ref|done}; the returned function stops it.
 export function turn(rt, { ref, started, prompt, cwd }, emit) {
-  const a = ADAPTERS[rt.id];
+  const a = Object.create(ADAPTERS[rt.id]);  // per-run state (e.g. dsh: did text already stream)
   let file = null;
   if (rt.id === 'openclaw') {
     const dir = join(tmpdir(), 'spectrahub-msg');
@@ -131,8 +201,11 @@ export function turn(rt, { ref, started, prompt, cwd }, emit) {
     file = join(dir, `${randomUUID()}.txt`);
     writeFileSync(file, prompt, { mode: 0o600 });
   }
-  const child = spawn(rt.path, a.argv(ref, started, { agent: rt.agent, file }), {
-    cwd, env: { ...process.env, NO_COLOR: '1' }, stdio: [a.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+  const l = rt.launch;
+  const env = { ...process.env, ...(l?.envFile ? readEnvFile(l.envFile) : {}), ...(l?.env ?? {}), NO_COLOR: '1' };
+  const [bin, args] = l ? [l.node, [l.script, ...a.argv(ref, started, { agent: rt.agent, file })]] : [rt.path, a.argv(ref, started, { agent: rt.agent, file })];
+  const child = spawn(bin, args, {
+    cwd: l?.cwd ?? cwd, env, stdio: [a.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
   if (a.stdin) child.stdin.end(prompt);
   let done = false;

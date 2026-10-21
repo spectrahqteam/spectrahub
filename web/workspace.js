@@ -20,7 +20,7 @@ const statusEl = $('status');
 const topMeta = $('topMeta');
 const crumb = $('crumb');
 
-const COLORS = { claude: '#d97757', codex: '#e8e8e8', openclaw: '#e0512f', hermes: '#8fb7ff', deepseek: '#4d6bfe' };
+const COLORS = { claude: '#d97757', codex: '#e8e8e8', openclaw: '#e0512f', dsh: '#4d6bfe' };
 const narrow = matchMedia('(max-width: 899px)');
 
 // ---------- storage ----------
@@ -453,10 +453,13 @@ function parseLine(text) {
   const names = Object.keys(chat.s.agents);
   const to = [];
   let rest = text;
+  // an agent answers to its id and to the name its runtime gives it (e.g. @dsh or @hermes)
+  const alias = Object.fromEntries(agents.filter((a) => a.agent && names.includes(a.id)).map((a) => [a.agent, a.id]));
   for (let m; (m = /^\s*@([\w-]+)\s*/.exec(rest));) {
     const n = m[1].toLowerCase();
     if (n === 'all' || n === 'wszyscy') to.push(...names);
     else if (names.includes(n)) to.push(n);
+    else if (alias[n]) to.push(alias[n]);
     else return { unknown: n };
     rest = rest.slice(m[0].length);
   }
@@ -529,7 +532,7 @@ async function openStart() {
     box.checked = a.ready;
     box.disabled = !a.ready;
     if (!a.ready) l.classList.add('off');
-    l.append(box, el('span', 'nm', a.label), el('small', null, a.ready ? (a.id === 'openclaw' && a.agent ? `agent ${a.agent}` : (a.version ?? '').split(' ')[0]) : a.note ?? 'niedostępny'));
+    l.append(box, el('span', 'nm', a.label), el('small', null, a.ready ? (a.agent ? `@${a.id} · @${a.agent}` : `@${a.id}`) : a.note ?? 'niedostępny'));
     pick.append(l);
   }
   if (!ready.length) pick.append(el('p', 'p-note', 'Nie znaleziono agenta, którego da się uruchomić. Zainstaluj Claude Code, Codex albo OpenClaw i zeskanuj ponownie.'));
@@ -625,13 +628,14 @@ function renderPanel() {
       const g = el('div', 'grow');
       const name = el('b', null, a.label);
       name.style.color = a.installed ? color(a.id) : 'var(--dim)';
-      g.append(name, el('small', null, a.ready ? `${a.version ?? ''}${a.agent ? ` · agent ${a.agent}` : ''}` : a.installed ? a.note ?? 'niedostępny' : 'nie znaleziono'));
+      const where = [a.version, a.agent && `agent ${a.agent}`, a.via].filter(Boolean).join(' · ');
+      g.append(name, el('small', null, a.ready ? where : a.installed ? a.note ?? 'niedostępny' : 'nie znaleziono'));
       r.append(g);
       body.push(r);
     }
     const b = el('button', 'p-btn ghost', 'skanuj ponownie');
     b.addEventListener('click', async () => { b.textContent = 'skanuję…'; await loadAgents(true); renderPanel(); });
-    body.push(sec(b), sec(el('p', 'p-note', 'Skaner szuka: Claude Code, Codex, OpenClaw, Hermes, DeepSeek. Agenci w sesji działają z pełnymi uprawnieniami na tym serwerze.')));
+    body.push(sec(b), sec(el('p', 'p-note', 'Skaner szuka Claude Code, Codex, OpenClaw i DeepSeek Harness (Hermes): w PATH, w działających usługach systemd i w katalogach instalacji. Agenci w sesji działają z pełnymi uprawnieniami na tym serwerze.')));
   } else if (panelName === 'settings') {
     const kv = el('div', 'p-kv');
     kv.append(el('span', null, 'host'), el('code', null, `${info.user}@${info.host}`), el('span', null, 'katalog'), el('code', null, info.cwdShort));
