@@ -46,21 +46,22 @@ svg{display:block;fill:none;stroke:currentColor}
 
 /* ----- the mark: just the logo ----- */
 .hub{display:flex;flex-direction:column;align-items:center;position:relative}
-.core{position:relative;display:grid;place-items:center}
-.logo{width:72px;height:auto;aspect-ratio:20/15.2;overflow:visible;fill:var(--ink);stroke:none;
-  filter:drop-shadow(0 0 18px rgba(255,255,255,.07));animation:glow 6s 1.4s ease-in-out infinite}
-.logo .tri{transform-box:fill-box;transform-origin:center;
-  animation:triIn .9s .1s cubic-bezier(.2,.8,.3,1) both,nudge 6s 2.2s ease-in-out infinite}
-.logo .bar{transform-box:fill-box;transform-origin:left center;
-  animation:barIn .55s cubic-bezier(.2,.8,.3,1) both,signal 6s ease-in-out infinite}
-.logo .bar:nth-of-type(1){animation-delay:.45s,2.6s}
-.logo .bar:nth-of-type(2){animation-delay:.56s,2.75s}
-.logo .bar:nth-of-type(3){animation-delay:.67s,2.9s}
-@keyframes triIn{from{transform:translateX(18%) scale(.9)}to{transform:none}}
-@keyframes barIn{from{transform:scaleX(.35)}to{transform:scaleX(1)}}
-@keyframes nudge{0%,64%,100%{transform:none}70%{transform:translateX(-4%)}78%{transform:none}}
+.core{position:relative;display:grid;place-items:center;isolation:isolate}
+.logo{position:relative;display:block;width:72px;aspect-ratio:20/15.2;animation:logoIn .9s .1s cubic-bezier(.2,.8,.3,1) both}
+/* the glow is its own layer behind the mark, never a filter on it */
+.core::before{content:"";position:absolute;inset:-45%;z-index:-1;border-radius:50%;pointer-events:none;
+  background:radial-gradient(closest-side,rgba(255,255,255,.12),transparent);animation:glow 6s 1.4s ease-in-out infinite}
+.logo i{position:absolute;display:block;background:var(--ink);will-change:transform}
+.logo .tri{left:4%;width:57%;top:5.263%;height:89.474%;clip-path:polygon(0 50%,100% 0,100% 100%);
+  animation:nudge 6s 2.2s ease-in-out infinite}
+.logo .bar{left:73%;width:23%;height:14.474%;transform-origin:left center;animation:signal 6s ease-in-out infinite}
+.logo .b1{top:14.474%;animation-delay:2.6s}
+.logo .b2{top:44.737%;animation-delay:2.75s}
+.logo .b3{top:75%;animation-delay:2.9s}
+@keyframes logoIn{from{transform:translateX(10%) scale(.9)}to{transform:none}}
+@keyframes nudge{0%,64%,100%{transform:none}70%{transform:translateX(-7%)}78%{transform:none}}
 @keyframes signal{0%,60%,100%{transform:none}66%{transform:translateX(14%)}74%{transform:none}}
-@keyframes glow{0%,100%{filter:drop-shadow(0 0 18px rgba(255,255,255,.06))}50%{filter:drop-shadow(0 0 26px rgba(255,255,255,.14))}}
+@keyframes glow{0%,100%{opacity:.5}50%{opacity:1}}
 
 .word{text-align:center;margin-top:16px;animation:wordIn 1s .45s cubic-bezier(.2,.7,.3,1) both}
 .word h1{font-size:15px;letter-spacing:.26em;color:var(--ink);font-weight:500;padding-left:.26em}
@@ -121,7 +122,6 @@ svg{display:block;fill:none;stroke:currentColor}
 .rt{display:flex;align-items:center;gap:6px;transition:color .25s}
 .tile:hover .rt{color:var(--ink-2)}
 .rt svg{width:14px;height:14px;color:var(--c);fill:currentColor;stroke:none;flex:0 0 14px}
-.rt svg.stroke{fill:none;stroke:currentColor;stroke-width:1.4;stroke-linejoin:round;stroke-linecap:round}
 .tile:hover .rt svg{transform:scale(1.12);transition:transform .25s}
 
 /* ----- drawings ----- */
