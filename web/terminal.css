@@ -1,0 +1,56 @@
+/* Terminal page: the start screen's black and white, macOS window lights, Ubuntu-like shell. */
+:root{--t-green:#73c26f;--t-blue:#6c9ef8;--t-red:#e5534b;--t-yellow:#d7a85f;--t-magenta:#c678dd;--t-cyan:#56b6c2}
+
+.term-body{height:100vh;height:100svh;overflow:hidden}
+.brand{text-decoration:none}
+.crumb{margin-right:auto;color:var(--muted);font-size:11px;letter-spacing:.08em}
+.crumb::before{content:"/";margin:0 10px 0 2px;color:var(--dim2)}
+
+.term-page{flex:1;min-height:0;display:flex;padding:16px;
+  background-image:radial-gradient(circle,#1c1c1c 1.1px,transparent 1.5px);background-size:22px 22px}
+.win{flex:1;min-width:0;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:12px;
+  background:#050505;overflow:hidden;box-shadow:0 30px 80px -40px rgba(255,255,255,.08)}
+
+.win-bar{display:flex;align-items:center;gap:12px;height:36px;padding:0 14px;border-bottom:1px solid var(--line);background:#0a0a0a}
+.lights{display:flex;gap:7px}
+.lights i{width:11px;height:11px;border-radius:50%;display:block}
+.lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.win-title{flex:1;text-align:center;color:var(--muted);font-size:11px;letter-spacing:.04em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.win-meta{font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);border:1px solid #1f1f1f;border-radius:20px;padding:2px 8px}
+
+.tabs{display:flex;gap:2px;padding:6px 10px 0;border-bottom:1px solid var(--line);background:#070707}
+.tab{display:flex;align-items:center;gap:8px;font:inherit;font-size:11px;color:var(--muted);background:none;border:1px solid transparent;
+  border-bottom:0;border-radius:8px 8px 0 0;padding:7px 14px;cursor:default}
+.tab.on{color:var(--ink);background:#050505;border-color:var(--line);margin-bottom:-1px;box-shadow:inset 0 1px 0 var(--accent)}
+.state{width:6px;height:6px;border-radius:50%;background:var(--dim2)}
+.state.ok{background:var(--ok)}.state.busy{background:var(--accent)}.state.off{background:var(--t-red)}
+
+.screen{flex:1;min-height:0;overflow-y:auto;padding:14px 16px 18px;font-size:13px;line-height:1.55;color:#d6d6d6;cursor:text;
+  overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+#out,.cmd{white-space:pre-wrap;word-break:break-all}
+#out .note{color:var(--muted)}
+#out .err{color:var(--t-red)}
+#out .warn{color:var(--t-yellow)}
+.p-user{color:var(--t-green);font-weight:700}
+.p-path{color:var(--t-blue);font-weight:700}
+
+.cmd{position:relative}
+.cmd input{position:absolute;inset:0;width:100%;opacity:0;border:0;padding:0;font:inherit;color:transparent;background:transparent;caret-color:transparent}
+.cmd.hidden{display:none}
+.cur{background:#e8e8e8;color:#000}
+.cmd:not(.focus) .cur{background:none;outline:1px solid #8a8a8a;outline-offset:-1px;color:inherit}
+.cmd.focus .cur{animation:curBlink 1.1s steps(1,end) infinite}
+@keyframes curBlink{50%{background:none;color:inherit}}
+
+/* ANSI SGR */
+.a1{font-weight:700}.a2{opacity:.7}.a4{text-decoration:underline}
+.f30{color:#5c5c5c}.f31{color:var(--t-red)}.f32{color:var(--t-green)}.f33{color:var(--t-yellow)}
+.f34{color:var(--t-blue)}.f35{color:var(--t-magenta)}.f36{color:var(--t-cyan)}.f37{color:#d6d6d6}
+.f90{color:#8a8a8a}.f91{color:#ff7b72}.f92{color:#9be38f}.f93{color:#f0c674}.f94{color:#8fb7ff}.f95{color:#e0a0f0}.f96{color:#80d8e0}.f97{color:#fff}
+
+@media (max-width:640px){
+  .term-page{padding:10px}
+  .screen{font-size:12px;padding:12px 12px 16px}
+  .win-meta{display:none}
+}
+@media (prefers-reduced-motion:reduce){.cmd.focus .cur{animation:none}}

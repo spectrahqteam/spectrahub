@@ -64,6 +64,23 @@ server {
 
 Then issue a certificate with certbot or acme.sh, exactly as for any other site.
 
+## Terminal
+
+The terminal page (`/terminal`) is off until the owner creates a token:
+
+```bash
+spectrahub token            # prints the token, stores it in ~/.spectrahub/token (mode 600)
+spectrahub token --rotate   # replace it; open sessions must log in again
+```
+
+Paste the token into the terminal page once; the browser keeps it. Without it every terminal
+call answers 401, and with no token file at all it answers 403.
+
+The terminal is read-only for now: only an exact list of command lines runs (`help` shows it),
+without a shell, with a 15 s limit and a capped output. There is no PTY, so the page says
+"bez TTY" and interactive programs are not available. Output is streamed as server-sent events;
+SpectraHub sends `X-Accel-Buffering: no`, so nginx passes it through without extra config.
+
 ## Uninstall
 
 ```bash
@@ -76,6 +93,7 @@ rm -rf ~/.spectrahub        # this deletes your data
 
 ```
 ~/.spectrahub/config.json   settings (port, host, owner)
+~/.spectrahub/token        owner token for the terminal (mode 600, never in config.json)
 ~/.spectrahub/data/         state — this is what you back up
 ~/.spectrahub/logs/         logs
 ```

@@ -8,6 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { VERSION, defaultDir, paths, readConfig, writeConfig, newConfig } from '../src/config.js';
 import { start } from '../src/server.js';
+import { ensureToken, tokenPath } from '../src/terminal.js';
 
 const PKG_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const args = process.argv.slice(2);
@@ -73,12 +74,21 @@ Usage: spectrahub <command> [options]
   doctor      check the install and report every deviation
   service     install | uninstall the systemd unit
               --system     system-wide unit (needs root)
+  token       print the owner token for the terminal (created on first use)
+              --rotate     replace it; open sessions must log in again
   version     print version
 `);
   },
 
   version() {
     console.log(VERSION);
+  },
+
+  token() {
+    const { dir } = need();
+    const token = ensureToken(dir, { rotate: Boolean(flag('rotate', false)) });
+    console.log(token);
+    console.error(`stored in ${tokenPath(dir)} (owner only) — paste it into the terminal page once`);
   },
 
   init() {

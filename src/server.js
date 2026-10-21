@@ -4,7 +4,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { VERSION, paths } from './config.js';
+import { VERSION, paths, defaultDir } from './config.js';
+import { authorize, runLine, terminalInfo } from './terminal.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const WEB = join(ROOT, 'web');
@@ -49,11 +50,16 @@ async function serveStatic(res, urlPath) {
   const rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath).replace(/^\/+/, '');
   const target = resolve(join(WEB, normalize(rel)));
   if (!target.startsWith(WEB + sep) && target !== WEB) return send(res, 403, 'forbidden');
+  let file = target;
+  let info = await stat(file).catch(() => null);
+  if (!info && !extname(file)) {  // /terminal → terminal.html
+    file += '.html';
+    info = await stat(file).catch(() => null);
+  }
+  if (!info) return send(res, 404, 'not found');
+  if (info.isDirectory()) return serveStatic(res, join(urlPath, 'index.html'));
   try {
-    const info = await stat(target);
-    if (info.isDirectory()) return serveStatic(res, join(urlPath, 'index.html'));
-    const body = await readFile(target);
-    send(res, 200, body, TYPES[extname(target)] ?? 'application/octet-stream');
+    send(res, 200, await readFile(file), TYPES[extname(file)] ?? 'application/octet-stream');
   } catch {
     send(res, 404, 'not found');
   }
@@ -93,6 +99,38 @@ a{color:#d97757;text-decoration:none}
 </div></body></html>`;
 }
 
+function readBody(req, limit = 4096) {
+  return new Promise((ok, fail) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { fail(new Error('too large')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => ok(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', fail);
+  });
+}
+
+// Terminal routes answer only the owner: 403 until a token exists, 401 on a wrong one.
+async function terminalRoute(req, res, url, config) {
+  const dir = config.dir ?? defaultDir();
+  const auth = authorize(req, dir);
+  if (auth === 'disabled') return send(res, 403, JSON.stringify({ error: 'terminal disabled', hint: 'spectrahub token' }), 'application/json; charset=utf-8');
+  if (auth !== 'ok') return send(res, 401, JSON.stringify({ error: 'unauthorized' }), 'application/json; charset=utf-8');
+  if (url.pathname === '/api/terminal/info' && req.method === 'GET') {
+    return send(res, 200, JSON.stringify(terminalInfo(config)), 'application/json; charset=utf-8');
+  }
+  if (url.pathname === '/api/terminal/run' && req.method === 'POST') {
+    let line;
+    try { line = JSON.parse(await readBody(req)).line; } catch { return send(res, 400, 'bad request'); }
+    if (typeof line !== 'string') return send(res, 400, 'bad request');
+    return runLine(config, line, res);
+  }
+  return send(res, 404, 'not found');
+}
+
 export function createServer(config) {
   return httpCreateServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -110,6 +148,7 @@ export function createServer(config) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
     }
+    if (url.pathname.startsWith('/api/terminal/')) return terminalRoute(req, res, url, config);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
     return serveStatic(res, url.pathname);
   });

@@ -11,13 +11,17 @@
 - [x] smoke tests + CI on Node 20/22
 - [ ] SQLite bootstrap, owner account
 
-## 0.3.0 — chat
+## 0.3.0 — terminal and chat (brief: `docs/BRIEF-terminal-chat.md`)
+- [x] read-only terminal: exact command allowlist, SSE stream, Ubuntu-like prompt, owner token
+- [ ] agent sessions as terminal tabs
+- [ ] chat as a stream in the same window (`@agent`, `/command`)
+- [ ] inline approval cards (TAK / NIE in the stream)
 - [ ] tabs, one session per tab, drafts kept per tab
 - [ ] runtime adapters: at least one working end-to-end
 - [ ] approval cards
 
-## 0.4.0 — terminal and files
-- [ ] terminal session per host, command history
+## 0.4.0 — files
+- [ ] terminal session per host (PTY), commands beyond the read-only list behind approvals
 - [ ] file tree + preview with allowlist/denylist
 - [ ] GitHub panel (read-only: repos, branches, PR list)
 
