@@ -152,6 +152,17 @@
 .dlg-btns .ghost{background:none;color:var(--muted);border:1px solid var(--line-hi)}
 .dlg-btns .go{background:var(--ink);color:#000;border:0}
 
+/* runtime marks next to agents */
+svg.mark{display:inline-block;width:1em;height:1em;vertical-align:-.15em;margin-right:.4em;fill:currentColor;stroke:none;flex:0 0 auto}
+.e .who svg.mark{color:var(--c)}
+.e .to .tag{color:var(--c)}
+.e .to .tag svg.mark{width:.95em;height:.95em}
+.hints svg.mark{color:var(--c);width:12px;height:12px;margin-right:4px;vertical-align:-2px}
+.c-prompt .to svg.mark{color:var(--accent)}
+.chip svg.mark{width:10px;height:10px;margin-right:2px;color:var(--c)}
+.ag-row svg.mark{width:16px;height:16px;margin:0;color:var(--muted)}
+.pick svg.mark{width:16px;height:16px;margin:0;color:var(--c)}
+
 /* ANSI SGR */
 .a1{font-weight:700}.a2{opacity:.7}.a4{text-decoration:underline}
 .f30{color:#5c5c5c}.f31{color:var(--t-red)}.f32{color:var(--t-green)}.f33{color:var(--t-yellow)}

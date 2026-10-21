@@ -132,7 +132,7 @@ test('a turn streams the reply, then the agent resumes its own session', async (
   const ref = s.agents.claude.ref;
   assert.deepEqual(calls.at(-2).slice(calls.at(-2).indexOf('--session-id'), calls.at(-2).indexOf('--session-id') + 2), ['--session-id', ref]);
   assert.deepEqual(calls.at(-1).slice(calls.at(-1).indexOf('--resume'), calls.at(-1).indexOf('--resume') + 2), ['--resume', ref]);
-  assert.ok(calls.at(-1).includes('--settings'), 'host hooks are switched off');
+  assert.ok(!calls.at(-1).includes('--settings'), 'the agent keeps its own settings and hooks');
 });
 
 test('sessions are listed and survive on disk', async () => {

@@ -130,12 +130,12 @@ export async function scan({ fresh = false } = {}) {
 
 const short = (s, n = 160) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
-// Claude Code: streamed text deltas, tool calls as one-line notes. Hooks of the host are off so an
-// agent run here never writes into the operator's own memory or automations.
+// Claude Code: streamed text deltas, tool calls as one-line notes. SpectraHub only opens a window to
+// the agent: its own settings, instructions and hooks apply as they would in a terminal.
 const claude = {
   argv(ref, started) {
     return ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-      '--permission-mode', 'acceptEdits', '--settings', JSON.stringify({ disableAllHooks: true }),
+      '--permission-mode', 'acceptEdits',
       ...(started ? ['--resume', ref] : ['--session-id', ref]),
       '--allowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'];
   },
