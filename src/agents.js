@@ -3,19 +3,20 @@
 import { spawn, execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
-import { basename, delimiter, join } from 'node:path';
+import { basename, delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-// What the scanner looks for: commands on PATH, then systemd units that already run the agent
-// (so we start it exactly as the host does), then usual install folders.
+// What the scanner looks for, on any server: commands on PATH, then any running systemd service
+// (system or user) whose program belongs to the runtime's npm package — recognised by package
+// name, not by path or unit name — then the usual global npm folders.
 // `adapter: false` means we can see it but cannot drive it yet.
 const RUNTIMES = [
   { id: 'claude', label: 'Claude Code', bins: ['claude'], adapter: true },
   { id: 'codex', label: 'Codex', bins: ['codex'], adapter: true },
   { id: 'openclaw', label: 'OpenClaw', bins: ['openclaw'], adapter: true },
   // DeepSeek Harness, also known as Hermes on some installs.
-  { id: 'dsh', label: 'DeepSeek Harness', bins: ['dsh', 'deepseek-harness', 'hermes'], units: ['dsh.service', 'hermes.service'],
-    scripts: ['/opt/dsh/apps/cli/lib/bin.js', '/usr/lib/node_modules/@deepseek-ai/dsh/lib/bin.js', '/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js'],
+  { id: 'dsh', label: 'DeepSeek Harness', bins: ['dsh', 'deepseek-harness', 'hermes'], pkg: '@deepseek-ai/dsh',
+    scripts: ['/usr/lib/node_modules/@deepseek-ai/dsh/lib/bin.js', '/usr/local/lib/node_modules/@deepseek-ai/dsh/lib/bin.js'],
     adapter: true },
 ];
 
@@ -33,13 +34,32 @@ function run(bin, args, ms = 8000) {
   });
 }
 
+// The npm package a script belongs to: the nearest package.json above it.
+function packageOf(script) {
+  for (let d = dirname(script), i = 0; i < 5; i++, d = dirname(d)) {
+    try { return JSON.parse(readFileSync(join(d, 'package.json'), 'utf8')).name ?? null; } catch { /* go up */ }
+  }
+  return null;
+}
+
+// Running services, system and user, each with how it starts: one systemctl call per scope.
+async function runningUnits() {
+  const units = [];
+  for (const scope of ['--system', '--user']) {
+    const names = (await run('systemctl', [scope, 'list-units', '--type=service', '--state=running', '--no-legend', '--plain']))
+      .split('\n').map((l) => l.trim().split(/\s+/)[0]).filter((n) => n?.endsWith('.service'));
+    if (!names.length) continue;
+    const show = await run('systemctl', [scope, 'show', ...names, '-p', 'Id', '-p', 'ExecStart', '-p', 'WorkingDirectory', '-p', 'Environment', '-p', 'EnvironmentFiles'], 15000);
+    for (const block of show.split(/\n\n+/)) if (block.trim()) units.push(block);
+  }
+  return units;
+}
+
 // systemd unit → how it starts the agent: the node script, its folder, environment and env file.
-async function fromUnit(unit) {
-  const show = await run('systemctl', ['show', unit, '-p', 'ExecStart', '-p', 'WorkingDirectory', '-p', 'Environment', '-p', 'EnvironmentFiles', '-p', 'LoadState']);
-  if (!/LoadState=loaded/.test(show)) return null;
+function fromUnit(show, pkg) {
   const exec = /argv\[\]=([^;]+);/.exec(show)?.[1]?.trim().split(/\s+/) ?? [];
   const script = exec.find((a) => a.endsWith('.js'));
-  if (!script || !existsSync(script)) return null;
+  if (!script || !existsSync(script) || packageOf(script) !== pkg) return null;
   const env = {};
   for (const pair of (/^Environment=(.*)$/m.exec(show)?.[1] ?? '').split(/\s+/)) {
     const i = pair.indexOf('=');
@@ -51,7 +71,7 @@ async function fromUnit(unit) {
     cwd: /^WorkingDirectory=(.+)$/m.exec(show)?.[1] || null,
     env,
     envFile: /^EnvironmentFiles=(\S+)/m.exec(show)?.[1] || null,
-    unit,
+    unit: /^Id=(.+)$/m.exec(show)?.[1] ?? 'service',
   };
 }
 
@@ -73,12 +93,16 @@ let cachedAt = 0;
 // Installed runtimes with version; OpenClaw also reports which gateway agent answers by default.
 export async function scan({ fresh = false } = {}) {
   if (cache && !fresh && Date.now() - cachedAt < 60_000) return cache;
+  let units = null;
   const found = await Promise.all(RUNTIMES.map(async (r) => {
     let path = r.bins.map(which).find(Boolean) ?? null;
     let launch = null;  // node script run as the host runs it
-    for (const unit of path ? [] : r.units ?? []) { launch = await fromUnit(unit); if (launch) break; }
+    if (!path && r.pkg) {
+      units ??= runningUnits();
+      for (const show of await units) { launch = fromUnit(show, r.pkg); if (launch) break; }
+    }
     if (!path && !launch) {
-      const script = (r.scripts ?? []).find((f) => existsSync(f));
+      const script = (r.scripts ?? []).find((f) => existsSync(f) && packageOf(f) === r.pkg);
       if (script) launch = { node: process.execPath, script, cwd: null, env: {}, envFile: null, unit: null };
     }
     const out = { id: r.id, label: r.label, installed: Boolean(path || launch), ready: Boolean(path || launch) && r.adapter, path: path ?? launch?.script ?? null, version: null };

@@ -453,7 +453,7 @@ function parseLine(text) {
   const names = Object.keys(chat.s.agents);
   const to = [];
   let rest = text;
-  // an agent answers to its id and to the name its runtime gives it (e.g. @dsh or @hermes)
+  // an agent answers to its id and to the name its own runtime gives it (OpenClaw agent, Harness workspace)
   const alias = Object.fromEntries(agents.filter((a) => a.agent && names.includes(a.id)).map((a) => [a.agent, a.id]));
   for (let m; (m = /^\s*@([\w-]+)\s*/.exec(rest));) {
     const n = m[1].toLowerCase();
