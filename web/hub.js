@@ -84,13 +84,21 @@ function el(name, attrs) {
   return e;
 }
 
-// Reveal each tile when its branch arrives (desktop); CSS delays cover mobile and no-JS.
+// Reveal each tile when its branch arrives; CSS delays cover no-JS.
 function revealAt(tile, ms) {
   tile.style.animationDelay = `${Math.round(ms)}ms`;
 }
 
+// Mobile sizes the tiles so the first screen holds the mark and the first rows (see .fan --rows).
+function measureAbove() {
+  if (desktop.matches) return;
+  const above = map.getBoundingClientRect().top + scrollY + box(tiles[0]).t;
+  document.documentElement.style.setProperty('--above', `${Math.round(above)}px`);
+}
+
 function build() {
   const animate = first && !reduce.matches;
+  measureAbove();
   const { traces, joints } = desktop.matches ? desktopTraces() : mobileTraces();
   svg.replaceChildren();
   comets = [];
@@ -110,6 +118,7 @@ function build() {
       path.style.transition = `stroke-dashoffset ${DRAW_MS}ms cubic-bezier(.45,.05,.25,1) ${tr.delay}ms, stroke .35s ease, opacity .35s ease`;
       requestAnimationFrame(() => requestAnimationFrame(() => { path.style.strokeDashoffset = '0'; }));
       if (desktop.matches) revealAt(tr.tile, done - 200);
+      else tiles.forEach((t, i) => revealAt(t, done - 200 + i * 90));
     }
 
     const end = el('circle', { cx: Math.round(ex), cy: Math.round(ey), r: 2.6, class: 'end' });

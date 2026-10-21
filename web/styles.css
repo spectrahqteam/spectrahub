@@ -18,7 +18,7 @@ svg{display:block;fill:none;stroke:currentColor}
 .brand-mark{width:22px;height:auto;aspect-ratio:20/15.2;fill:var(--ink);stroke:none}
 
 /* ===== MOBILE: logo on top, tiles one under another ===== */
-.map{flex:1;position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;align-items:center;padding:38px 16px 28px}
+.map{flex:1;position:relative;isolation:isolate;overflow:hidden;display:flex;flex-direction:column;align-items:center;padding:26px 16px 16px}
 .map::before,.map::after{content:"";position:absolute;inset:0;z-index:-2;pointer-events:none;
   background-size:22px 22px;translate:calc(var(--mx,0) * -10px) calc(var(--my,0) * -10px);transition:translate .6s ease-out}
 .map::before{background-image:radial-gradient(circle,#2a2a2a 1.1px,transparent 1.5px);
@@ -32,7 +32,7 @@ svg{display:block;fill:none;stroke:currentColor}
 @keyframes fadeIn{from{opacity:0}}
 
 /* branches drawn by hub.js — white lines, orange only where a comet lands */
-.traces{position:absolute;inset:0;width:100%;height:100%;z-index:-1;overflow:visible;pointer-events:none}
+.traces{position:absolute;inset:0;width:100%;height:100%;z-index:1;overflow:visible;pointer-events:none}
 .traces .tr{stroke:var(--wire);stroke-width:1;transition:stroke .35s ease,opacity .35s ease}
 .traces .tr.hot{stroke:#6a6a6a}
 .map.has-hot .traces .tr:not(.hot){opacity:.45}
@@ -47,7 +47,7 @@ svg{display:block;fill:none;stroke:currentColor}
 /* ----- the mark: just the logo ----- */
 .hub{display:flex;flex-direction:column;align-items:center;position:relative}
 .core{position:relative;display:grid;place-items:center}
-.logo{width:84px;height:auto;aspect-ratio:20/15.2;overflow:visible;fill:var(--ink);stroke:none;
+.logo{width:72px;height:auto;aspect-ratio:20/15.2;overflow:visible;fill:var(--ink);stroke:none;
   filter:drop-shadow(0 0 18px rgba(255,255,255,.07));animation:glow 6s 1.4s ease-in-out infinite}
 .logo .tri{transform-box:fill-box;transform-origin:center;
   animation:triIn .9s .1s cubic-bezier(.2,.8,.3,1) both,nudge 6s 2.2s ease-in-out infinite}
@@ -56,23 +56,22 @@ svg{display:block;fill:none;stroke:currentColor}
 .logo .bar:nth-of-type(1){animation-delay:.45s,2.6s}
 .logo .bar:nth-of-type(2){animation-delay:.56s,2.75s}
 .logo .bar:nth-of-type(3){animation-delay:.67s,2.9s}
-.logo .glint{animation:glint 6s 1.6s cubic-bezier(.45,.05,.25,1) infinite}
-@keyframes triIn{from{opacity:0;transform:translateX(18%) scale(.9)}to{opacity:1;transform:none}}
-@keyframes barIn{from{opacity:0;transform:scaleX(0)}to{opacity:1;transform:scaleX(1)}}
+@keyframes triIn{from{transform:translateX(18%) scale(.9)}to{transform:none}}
+@keyframes barIn{from{transform:scaleX(.35)}to{transform:scaleX(1)}}
 @keyframes nudge{0%,64%,100%{transform:none}70%{transform:translateX(-4%)}78%{transform:none}}
-@keyframes signal{0%,60%,100%{opacity:1}66%{opacity:.3}74%{opacity:1}}
-@keyframes glint{0%{transform:translateX(0)}28%,100%{transform:translateX(30px)}}
+@keyframes signal{0%,60%,100%{transform:none}66%{transform:translateX(14%)}74%{transform:none}}
 @keyframes glow{0%,100%{filter:drop-shadow(0 0 18px rgba(255,255,255,.06))}50%{filter:drop-shadow(0 0 26px rgba(255,255,255,.14))}}
 
-.word{text-align:center;margin-top:20px;animation:wordIn 1s .45s cubic-bezier(.2,.7,.3,1) both}
+.word{text-align:center;margin-top:16px;animation:wordIn 1s .45s cubic-bezier(.2,.7,.3,1) both}
 .word h1{font-size:15px;letter-spacing:.26em;color:var(--ink);font-weight:500;padding-left:.26em}
 .word .tag{font-size:9px;letter-spacing:.2em;color:var(--muted);margin-top:9px;text-transform:uppercase}
 @keyframes wordIn{from{opacity:0;letter-spacing:.5em;filter:blur(3px)}to{opacity:1;filter:none}}
 
 /* ----- tiles: centered, a drawing on top ----- */
-.fan{display:flex;flex-direction:column;gap:12px;width:100%;padding-top:64px}
-.tile{border:1px solid var(--line);border-radius:12px;background:var(--tile);padding:38px 16px 22px;
-  display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px;
+.fan{--rows:3;--gap:12px;display:flex;flex-direction:column;gap:var(--gap);width:100%;padding-top:44px}
+.tile{border:1px solid var(--line);border-radius:12px;background:var(--tile);padding:28px 16px 14px;
+  min-height:calc((100svh - var(--above,260px) - 16px - (var(--rows) - 1) * var(--gap)) / var(--rows));
+  display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;
   position:relative;overflow:hidden;width:100%;
   animation:rise .6s cubic-bezier(.2,.7,.3,1) both;animation-delay:calc(900ms + var(--i) * 90ms);
   transition:border-color .3s ease,background .3s ease,transform .3s ease,box-shadow .3s ease}
@@ -97,9 +96,9 @@ svg{display:block;fill:none;stroke:currentColor}
 .tile:hover .tags span,.tile:focus-visible .tags span{border-color:#333;color:#c4c4c4}
 
 /* status from the roadmap, top-right */
-.badge{position:absolute;top:12px;right:12px;font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+.badge{position:absolute;top:10px;right:10px;font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
   border:1px solid #1f1f1f;border-radius:20px;padding:3px 8px;transition:color .3s,border-color .3s}
-.tile:hover .badge,.tile:focus-visible .badge{color:var(--accent);border-color:rgba(217,119,87,.35)}
+.tile:hover .badge,.tile:focus-visible .badge,.badge.os{color:var(--accent);border-color:rgba(217,119,87,.35)}
 
 /* corner brackets that open up on hover */
 .corner{--k:#2c2c2c;--s:9px;position:absolute;inset:7px;pointer-events:none;
@@ -119,7 +118,7 @@ svg{display:block;fill:none;stroke:currentColor}
 .tile:hover .rt svg{transform:scale(1.12);transition:transform .25s}
 
 /* ----- drawings ----- */
-.art{display:block;height:52px;aspect-ratio:120/72;color:#6e6e6e;transition:color .35s ease,transform .35s ease}
+.art{display:block;height:40px;aspect-ratio:120/72;color:#6e6e6e;transition:color .35s ease,transform .35s ease}
 .art svg{width:100%;height:100%;overflow:visible}
 .tile:hover .art,.tile:focus-visible .art{color:#e8e8e8;transform:translateY(-2px)}
 .art .ln{stroke:currentColor;stroke-width:1.2;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
@@ -137,13 +136,13 @@ svg{display:block;fill:none;stroke:currentColor}
 @keyframes blink{50%{opacity:0}}
 @keyframes typeLn{0%{stroke-dashoffset:1}18%,78%{stroke-dashoffset:0}92%,100%{stroke-dashoffset:1;opacity:0}}
 
-/* remote: the phone broadcasts */
-.art .beacon{fill:var(--accent);stroke:none;animation:beacon 2.8s ease-in-out infinite}
-.art .wv{stroke:currentColor;stroke-width:1.2;stroke-linecap:round;vector-effect:non-scaling-stroke;opacity:.25;
-  animation:wave 2.8s ease-out infinite}
-.art .w2{animation-delay:.25s}.art .w3{animation-delay:.5s}
-@keyframes beacon{0%,100%{opacity:.35}40%{opacity:1}}
-@keyframes wave{0%,100%{opacity:.22}30%{opacity:.95}70%{opacity:.22}}
+/* agents: each agent checks in, then the approval tick draws */
+.art .ags circle{fill:#4a4a4a;stroke:none;animation:agent 4s ease-in-out infinite}
+.art .ags circle:nth-child(2){animation-delay:1s}.art .ags circle:nth-child(3){animation-delay:2s}.art .ags circle:nth-child(4){animation-delay:3s}
+.art .ok{stroke:var(--accent);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;
+  stroke-dasharray:1;stroke-dashoffset:1;animation:tick 4s ease-in-out infinite}
+@keyframes agent{0%,40%,100%{fill:#4a4a4a}12%{fill:#fff}}
+@keyframes tick{0%,30%{stroke-dashoffset:1}50%,85%{stroke-dashoffset:0}100%{stroke-dashoffset:1}}
 
 /* vps: leds blink, a packet crosses the link */
 .art .led{fill:#8a8a8a;stroke:none;animation:led 3.2s steps(1,end) infinite}
@@ -171,7 +170,7 @@ svg{display:block;fill:none;stroke:currentColor}
 @keyframes breath{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
 @keyframes eq{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}
 
-/* agents: a scan line reads the file, the nodes light up in turn */
+/* files: a scan line reads the file, the nodes light up in turn */
 .art .scan{fill:var(--accent);stroke:none;opacity:.8;animation:scan 3.6s ease-in-out infinite}
 .art .nodes circle{animation:node 3.6s ease-in-out infinite}
 .art .nodes circle:nth-child(2){animation-delay:.9s}.art .nodes circle:nth-child(3){animation-delay:1.8s}
@@ -184,11 +183,35 @@ svg{display:block;fill:none;stroke:currentColor}
 .bottom a{color:var(--muted);word-break:break-all;transition:color .2s}
 .bottom a:hover{color:var(--ink)}
 
-/* ===== DESKTOP (>=1024): Terminal | logo | Remote on top, three tiles below ===== */
+/* ===== WIDE PORTRAIT (640–1023): bigger type, tiles fill the screen ===== */
+@media (min-width:640px) and (max-width:1023px){
+  .top{padding:15px 30px}
+  .map{padding:40px 30px 16px}
+  .logo{width:120px}
+  .word{margin-top:22px}
+  .word h1{font-size:21px;letter-spacing:.32em;padding-left:.32em}
+  .word .tag{font-size:10.5px;margin-top:11px}
+  .fan{--gap:16px;padding-top:56px}
+  .tile{padding:44px 30px 26px;gap:12px;border-radius:14px}
+  .art{height:72px;margin-bottom:6px}
+  .nhead{font-size:15px}
+  .desc{font-size:13.5px}
+  .tags{gap:8px}
+  .tags span{font-size:11px;padding:4px 11px}
+  .badge{top:14px;right:14px;font-size:9.5px}
+  .runtimes{font-size:12.5px;gap:8px 18px}
+  .rt svg{width:17px;height:17px;flex-basis:17px}
+  .bottom{flex-direction:row;justify-content:space-between;align-items:center;padding:14px 30px}
+}
+@media (min-width:640px) and (max-width:1023px) and (min-height:1200px){
+  .fan{--rows:5}
+}
+
+/* ===== DESKTOP (>=1024): VPS | logo | Terminal on top, three tiles below ===== */
 @media (min-width:1024px){
   body{height:100dvh}
   .top{padding:15px 30px;font-size:11.5px}
-  .map{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-areas:"t5 hub t4" "t1 t2 t3";
+  .map{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-areas:"vps hub term" "agents files studio";
     align-content:center;column-gap:clamp(20px,2.2vw,36px);row-gap:clamp(88px,12vh,140px);
     padding:clamp(24px,4vh,48px) max(clamp(28px,3.5vw,64px),calc((100% - 1400px) / 2))}
   .map::before{-webkit-mask-image:radial-gradient(60% 65% at 50% 46%,#000,rgba(0,0,0,.25) 70%,transparent);
@@ -200,7 +223,7 @@ svg{display:block;fill:none;stroke:currentColor}
   .word h1{font-size:clamp(18px,2.2vmin,24px);letter-spacing:.32em;padding-left:.32em}
   .word .tag{font-size:10px;margin-top:10px}
 
-  .t5{grid-area:t5}.t4{grid-area:t4}.t1{grid-area:t1}.t2{grid-area:t2}.t3{grid-area:t3}
+  .t-vps{grid-area:vps}.t-term{grid-area:term}.t-agents{grid-area:agents}.t-files{grid-area:files}.t-studio{grid-area:studio}
   .tile{min-height:clamp(230px,30vh,300px);padding:clamp(40px,4.4vh,48px) clamp(22px,2vw,30px) clamp(26px,3.2vh,34px);
     gap:clamp(8px,1.3vh,12px);border-radius:14px}
   .art{height:clamp(52px,7.6vh,80px);margin-bottom:clamp(2px,.8vh,8px)}
@@ -223,5 +246,5 @@ svg{display:block;fill:none;stroke:currentColor}
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
-  .art .type{stroke-dashoffset:0}
+  .art .type,.art .ok{stroke-dashoffset:0}
 }
