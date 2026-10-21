@@ -12,6 +12,7 @@ const desktop = matchMedia('(min-width: 1024px)');
 const DRAW_START = 650;   // ms after load, once the mark has settled
 const DRAW_MS = 750;
 const LOWER_DELAY = 300;  // the lower row starts after the side wires
+const LINK_MS = 320;      // mobile: each short link between tiles
 const TAIL = 34;          // comet tail length in px
 const SPEED = 0.085;      // px per ms
 const HOT_SPEED = 0.26;
@@ -69,13 +70,22 @@ function desktopTraces() {
   return { traces, joints: joints.slice(0, 1) };
 }
 
-// Mobile: one short stem from the name down to the first tile.
+// Mobile: a stem from the name to the first tile, then a link from each tile to the next;
+// each link draws once the tile above it is in.
 function mobileTraces() {
   const w = box(word);
   const c = box(core);
-  const top = tiles.reduce((a, b) => (box(a).t <= box(b).t ? a : b));
-  const n = box(top);
-  return { traces: [{ tile: top, pts: [[c.cx, w.b + 14], [c.cx, n.t]], delay: DRAW_START }], joints: [] };
+  const col = [...tiles].sort((a, b) => box(a).t - box(b).t);
+  const traces = [{ tile: col[0], pts: [[c.cx, w.b + 14], [c.cx, box(col[0]).t]], delay: DRAW_START }];
+  const joints = [];
+  let at = DRAW_START + DRAW_MS - 100;
+  for (let i = 1; i < col.length; i++) {
+    const a = box(col[i - 1]), b = box(col[i]);
+    traces.push({ tile: col[i], pts: [[b.cx, a.b], [b.cx, b.t]], delay: at, ms: LINK_MS });
+    joints.push([b.cx, a.b]);
+    at += LINK_MS - 60;
+  }
+  return { traces, joints };
 }
 
 function el(name, attrs) {
@@ -86,7 +96,7 @@ function el(name, attrs) {
 
 // Reveal each tile when its branch arrives; CSS delays cover no-JS.
 function revealAt(tile, ms) {
-  tile.style.animationDelay = `${Math.round(ms)}ms`;
+  tile.style.animationDelay = `${Math.round(ms)}ms, calc(var(--i) * -1.8s)`;
 }
 
 // Mobile sizes the tiles so the first screen holds the mark and the first rows (see .fan --rows).
@@ -110,15 +120,15 @@ function build() {
     owner.set(path, tr.tile);
     const len = path.getTotalLength();
     const [ex, ey] = tr.pts[tr.pts.length - 1];
-    const done = tr.delay + DRAW_MS;
+    const ms = tr.ms || DRAW_MS;
+    const done = tr.delay + ms;
 
     if (animate) {
       path.style.strokeDasharray = `${len}`;
       path.style.strokeDashoffset = `${len}`;
-      path.style.transition = `stroke-dashoffset ${DRAW_MS}ms cubic-bezier(.45,.05,.25,1) ${tr.delay}ms, stroke .35s ease, opacity .35s ease`;
+      path.style.transition = `stroke-dashoffset ${ms}ms cubic-bezier(.45,.05,.25,1) ${tr.delay}ms, stroke .35s ease, opacity .35s ease`;
       requestAnimationFrame(() => requestAnimationFrame(() => { path.style.strokeDashoffset = '0'; }));
-      if (desktop.matches) revealAt(tr.tile, done - 200);
-      else tiles.forEach((t, i) => revealAt(t, done - 200 + i * 90));
+      revealAt(tr.tile, done - 200);
     }
 
     const end = el('circle', { cx: Math.round(ex), cy: Math.round(ey), r: 2.6, class: 'end' });
@@ -129,17 +139,19 @@ function build() {
 
     if (reduce.matches) continue;
     const count = Math.max(1, Math.round(len / 420));
+    const tl = Math.min(TAIL, len * 0.6);
+    const cycle = Math.max(len, 300);  // short links rest between runs instead of flickering
     for (let j = 0; j < count; j++) {
-      const tail = el('path', { d: path.getAttribute('d'), class: 'comet', 'stroke-dasharray': `${TAIL} ${len + TAIL}`, opacity: 0 });
+      const tail = el('path', { d: path.getAttribute('d'), class: 'comet', 'stroke-dasharray': `${tl} ${len + TAIL}`, opacity: 0 });
       const halo = el('circle', { r: 5, class: 'halo', opacity: 0 });
       const head = el('circle', { r: 1.8, class: 'head', opacity: 0 });
       svg.append(tail, halo, head);
-      comets.push({ path, len, tile: tr.tile, tail, halo, head, ring, t: (len / count) * j + Math.random() * len * 0.3 });
+      comets.push({ path, len, tl, cycle, tile: tr.tile, tail, halo, head, ring, t: (cycle / count) * j + Math.random() * cycle * 0.3 });
     }
   }
   for (const [x, y] of joints) svg.append(el('circle', { cx: Math.round(x), cy: Math.round(y), r: 3, class: 'jn' }));
 
-  if (animate) startAt = performance.now() + DRAW_START + LOWER_DELAY + DRAW_MS + 300;
+  if (animate) startAt = performance.now() + Math.max(...traces.map((t) => t.delay + (t.ms || DRAW_MS))) + 300;
   first = false;
 }
 
@@ -158,11 +170,12 @@ function frame(now) {
   if (now >= startAt) {
     for (const c of comets) {
       const next = c.t + dt * (c.tile === hot ? HOT_SPEED : SPEED);
-      if (next >= c.len) arrive(c);
-      c.t = next % c.len;
-      const p = c.path.getPointAtLength(c.t);
-      const fade = Math.max(0, Math.min(1, c.t / 24, (c.len - c.t) / 24));
-      c.tail.setAttribute('stroke-dashoffset', TAIL - c.t);
+      if (c.t < c.len && next >= c.len) arrive(c);
+      c.t = next % c.cycle;
+      const p = c.path.getPointAtLength(Math.min(c.t, c.len));
+      const edge = Math.min(24, c.len / 3);
+      const fade = c.t > c.len ? 0 : Math.max(0, Math.min(1, c.t / edge, (c.len - c.t) / edge));
+      c.tail.setAttribute('stroke-dashoffset', c.tl - c.t);
       c.tail.setAttribute('opacity', fade * 0.55);
       c.head.setAttribute('cx', p.x); c.head.setAttribute('cy', p.y); c.head.setAttribute('opacity', fade);
       c.halo.setAttribute('cx', p.x); c.halo.setAttribute('cy', p.y); c.halo.setAttribute('opacity', fade * 0.22);
