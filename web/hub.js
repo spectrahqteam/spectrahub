@@ -96,7 +96,7 @@ function el(name, attrs) {
 
 // Reveal each tile when its branch arrives; CSS delays cover no-JS.
 function revealAt(tile, ms) {
-  tile.style.animationDelay = `${Math.round(ms)}ms, calc(var(--i) * -1.8s)`;
+  tile.style.animationDelay = `${Math.round(ms)}ms`;
 }
 
 // Mobile sizes the tiles so the first screen holds the mark and the first rows (see .fan --rows).
@@ -128,7 +128,7 @@ function build() {
       path.style.strokeDashoffset = `${len}`;
       path.style.transition = `stroke-dashoffset ${ms}ms cubic-bezier(.45,.05,.25,1) ${tr.delay}ms, stroke .35s ease, opacity .35s ease`;
       requestAnimationFrame(() => requestAnimationFrame(() => { path.style.strokeDashoffset = '0'; }));
-      revealAt(tr.tile, done - 200);
+      revealAt(tr.tile, box(tr.tile).t + map.getBoundingClientRect().top > innerHeight ? -1000 : done - 200);
     }
 
     const end = el('circle', { cx: Math.round(ex), cy: Math.round(ey), r: 2.6, class: 'end' });
@@ -146,7 +146,8 @@ function build() {
       const halo = el('circle', { r: 5, class: 'halo', opacity: 0 });
       const head = el('circle', { r: 1.8, class: 'head', opacity: 0 });
       svg.append(tail, halo, head);
-      comets.push({ path, len, tl, cycle, tile: tr.tile, tail, halo, head, ring, t: (cycle / count) * j + Math.random() * cycle * 0.3 });
+      const ys = tr.pts.map((p) => p[1]);
+      comets.push({ y0: Math.min(...ys), y1: Math.max(...ys), path, len, tl, cycle, tile: tr.tile, tail, halo, head, ring, t: (cycle / count) * j + Math.random() * cycle * 0.3 });
     }
   }
   for (const [x, y] of joints) svg.append(el('circle', { cx: Math.round(x), cy: Math.round(y), r: 3, class: 'jn' }));
@@ -167,8 +168,10 @@ let last = 0;
 function frame(now) {
   const dt = last ? Math.min(64, now - last) : 16;
   last = now;
-  if (now >= startAt) {
+  if (now >= startAt && !scrolling) {
+    const top = map.getBoundingClientRect().top;
     for (const c of comets) {
+      if (c.y0 + top > innerHeight + 40 || c.y1 + top < -40) continue;
       const next = c.t + dt * (c.tile === hot ? HOT_SPEED : SPEED);
       if (c.t < c.len && next >= c.len) arrive(c);
       c.t = next % c.cycle;
@@ -198,6 +201,19 @@ for (const tile of tiles) {
   tile.addEventListener('blur', () => setHot(null));
 }
 
+// Only tiles on screen animate their drawings; nothing ticks while the page is scrolling.
+const io = new IntersectionObserver((entries) => {
+  for (const e of entries) e.target.classList.toggle('live', e.isIntersecting);
+});
+for (const t of tiles) io.observe(t);
+let scrolling = false;
+let scrollTimer = 0;
+addEventListener('scroll', () => {
+  if (!scrolling) { scrolling = true; document.documentElement.classList.add('scrolling'); }
+  clearTimeout(scrollTimer);
+  scrollTimer = setTimeout(() => { scrolling = false; document.documentElement.classList.remove('scrolling'); }, 160);
+}, { passive: true });
+
 // The dots light up around the pointer or finger, and drift a little with the mouse.
 let spotTimer = 0;
 function spot(x, y) {
@@ -212,18 +228,21 @@ function spot(x, y) {
     map.style.setProperty('--my', ((y - r.top) / r.height - 0.5).toFixed(3));
   }
 }
-map.addEventListener('pointermove', (e) => spot(e.clientX, e.clientY));
-map.addEventListener('pointerdown', (e) => spot(e.clientX, e.clientY));
+map.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse') spot(e.clientX, e.clientY); });
 map.addEventListener('pointerleave', () => map.style.setProperty('--spot', '0'));
-for (const type of ['touchstart', 'touchmove']) {
-  map.addEventListener(type, (e) => { const t = e.touches[0]; if (t) spot(t.clientX, t.clientY); }, { passive: true });
-}
 
 let queued = false;
+let layoutKey = '';
 const relayout = () => {
   if (queued) return;
   queued = true;
-  requestAnimationFrame(() => { queued = false; build(); });
+  requestAnimationFrame(() => {
+    queued = false;
+    const key = [core, word, ...tiles].map((e) => { const b = box(e); return `${b.l},${b.t},${b.w},${b.h}`; }).join(';');
+    if (key === layoutKey) return;
+    layoutKey = key;
+    build();
+  });
 };
 const ro = new ResizeObserver(relayout);
 ro.observe(map);

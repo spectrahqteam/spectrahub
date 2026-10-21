@@ -2,7 +2,7 @@
 :root{--bg:#000;--tile:#070707;--line:#1a1a1a;--line-hi:#2e2e2e;--wire:#262626;
   --ink:#fff;--ink-2:#d6d6d6;--muted:#8c8c8c;--dim:#5c5c5c;--dim2:#3a3a3a;--accent:#d97757;--ok:#8fae8f}
 html{-webkit-text-size-adjust:100%;background:var(--bg)}
-body{min-height:100dvh;background:var(--bg);color:var(--ink);
+body{min-height:100vh;min-height:100svh;background:var(--bg);color:var(--ink);
   font-family:"DejaVu Sans Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   font-size:12px;display:flex;flex-direction:column;overflow-x:hidden}
 a{color:inherit;text-decoration:none}
@@ -72,27 +72,31 @@ svg{display:block;fill:none;stroke:currentColor}
 
 /* ----- tiles: centered, a drawing on top ----- */
 .fan{--rows:3;--gap:26px;display:flex;flex-direction:column;gap:var(--gap);width:100%;padding-top:44px}
-@property --a{syntax:"<angle>";inherits:false;initial-value:0deg}
-.tile{--bg:var(--tile);--rim:var(--line);border:1px solid transparent;border-radius:12px;
-  background:linear-gradient(var(--bg),var(--bg)) padding-box,
-    conic-gradient(from var(--a),var(--rim) 0 62%,rgba(255,255,255,.34) 80%,var(--rim) 96%) border-box;padding:26px 16px 13px;
+.tile{border:1px solid var(--line);border-radius:12px;background:var(--tile);padding:26px 16px 13px;
   min-height:calc((100svh - var(--above,260px) - 16px - (var(--rows) - 1) * var(--gap)) / var(--rows));
   display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;
   position:relative;overflow:hidden;width:100%;
-  animation:rise .6s cubic-bezier(.2,.7,.3,1) both,orbit 9s linear infinite;
-  animation-delay:calc(900ms + var(--i) * 90ms),calc(var(--i) * -1.8s);
+  animation:rise .6s cubic-bezier(.2,.7,.3,1) both;animation-delay:calc(900ms + var(--i) * 90ms);
   transition:border-color .3s ease,background .3s ease,transform .3s ease,box-shadow .3s ease}
 .tile::before{content:"";position:absolute;left:18%;right:18%;top:0;height:1px;pointer-events:none;
   background:linear-gradient(90deg,transparent,rgba(217,119,87,.7),transparent);opacity:0;transition:opacity .3s ease}
 .tile::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:0;
   background:linear-gradient(115deg,transparent 35%,rgba(255,255,255,.035) 50%,transparent 65%);transform:translateX(-60%)}
-.tile:hover,.tile:focus-visible{--rim:var(--line-hi);--bg:#0b0b0b;transform:translateY(-3px);outline:none;
+.tile:hover,.tile:focus-visible{border-color:var(--line-hi);background:#0b0b0b;transform:translateY(-3px);outline:none;
   box-shadow:0 18px 44px -28px rgba(255,255,255,.18)}
 .tile:hover::before,.tile:focus-visible::before{opacity:1}
 .tile:hover::after,.tile:focus-visible::after{opacity:1;animation:sheen 1.1s ease-out}
 .tile:active{transform:translateY(0) scale(.997)}
 @keyframes sheen{from{transform:translateX(-60%)}to{transform:translateX(60%)}}
-@keyframes orbit{to{--a:360deg}}
+/* a slow light runs around the border: a rotating layer seen only through a 1px ring,
+   so the browser just turns it on the compositor instead of repainting the tile */
+.rim{position:absolute;inset:0;border-radius:inherit;padding:1px;overflow:hidden;pointer-events:none;
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;
+          mask:linear-gradient(#000 0 0) content-box exclude,linear-gradient(#000 0 0)}
+.rim::before{content:"";position:absolute;left:50%;top:50%;width:150%;aspect-ratio:1;translate:-50% -50%;
+  background:conic-gradient(transparent 0 66%,rgba(255,255,255,.34) 82%,transparent 96%);
+  will-change:transform;animation:orbit 9s linear infinite;animation-delay:calc(var(--i) * -1.8s)}
+@keyframes orbit{to{transform:rotate(1turn)}}
 @keyframes rise{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:none}}
 
 .nhead{display:flex;align-items:center;justify-content:center;gap:10px;font-size:12px;letter-spacing:.16em;color:var(--ink)}
@@ -123,6 +127,9 @@ svg{display:block;fill:none;stroke:currentColor}
 .tile:hover .rt{color:var(--ink-2)}
 .rt svg{width:14px;height:14px;color:var(--c);fill:currentColor;stroke:none;flex:0 0 14px}
 .tile:hover .rt svg{transform:scale(1.12);transition:transform .25s}
+
+/* drawings move only while their tile is on screen and the page is not being scrolled */
+.tile:not(.live) .art *,.tile:not(.live) .rim::before,.scrolling .art *{animation-play-state:paused!important}
 
 /* ----- drawings ----- */
 .art{display:block;height:38px;aspect-ratio:120/72;color:#6e6e6e;transition:color .35s ease,transform .35s ease}
