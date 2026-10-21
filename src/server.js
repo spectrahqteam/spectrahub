@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VERSION, paths, defaultDir } from './config.js';
-import { authorize, runLine, terminalInfo } from './terminal.js';
+import { authorize, createPairing, redeemPairing, runLine, terminalInfo } from './terminal.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const WEB = join(ROOT, 'web');
@@ -116,9 +116,20 @@ function readBody(req, limit = 4096) {
 // Terminal routes answer only the owner: 403 until a token exists, 401 on a wrong one.
 async function terminalRoute(req, res, url, config) {
   const dir = config.dir ?? defaultDir();
+  const json = (code, body) => send(res, code, JSON.stringify(body), 'application/json; charset=utf-8');
+  // A one-time code from a login link buys the token; no other route works without it.
+  if (url.pathname === '/api/terminal/pair' && req.method === 'POST') {
+    let code;
+    try { code = JSON.parse(await readBody(req)).code; } catch { return send(res, 400, 'bad request'); }
+    const token = redeemPairing(dir, code);
+    return token ? json(200, { token }) : json(401, { error: 'link used or expired' });
+  }
   const auth = authorize(req, dir);
   if (auth === 'disabled') return send(res, 403, JSON.stringify({ error: 'terminal disabled', hint: 'spectrahub token' }), 'application/json; charset=utf-8');
   if (auth !== 'ok') return send(res, 401, JSON.stringify({ error: 'unauthorized' }), 'application/json; charset=utf-8');
+  if (url.pathname === '/api/terminal/pair/new' && req.method === 'POST') {
+    return json(200, { code: createPairing(dir), ttlMinutes: 15 });
+  }
   if (url.pathname === '/api/terminal/info' && req.method === 'GET') {
     return send(res, 200, JSON.stringify(terminalInfo(config)), 'application/json; charset=utf-8');
   }

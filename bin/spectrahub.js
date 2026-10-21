@@ -8,7 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { VERSION, defaultDir, paths, readConfig, writeConfig, newConfig } from '../src/config.js';
 import { start } from '../src/server.js';
-import { ensureToken, loginLink, tokenPath } from '../src/terminal.js';
+import { createPairing, ensureToken, loginLink, tokenPath } from '../src/terminal.js';
 
 const PKG_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const args = process.argv.slice(2);
@@ -75,7 +75,7 @@ Usage: spectrahub <command> [options]
   doctor      check the install and report every deviation
   service     install | uninstall the systemd unit
               --system     system-wide unit (needs root)
-  login       print a one-time login link: open it and the browser is in
+  login       print a login link: open it and the browser is in (works once, 15 min)
   token       print the owner token for the terminal (created on first use)
               --rotate     replace it; open sessions must log in again
   version     print version
@@ -88,7 +88,7 @@ Usage: spectrahub <command> [options]
 
   login() {
     const { dir, config } = need();
-    console.log(loginLink(config, ensureToken(dir)));
+    console.log(loginLink(config, createPairing(dir)));
   },
 
   token() {
@@ -107,12 +107,12 @@ Usage: spectrahub <command> [options]
     const url = flag('url', null);
     if (typeof url === 'string') config.publicUrl = url;
     const file = writeConfig(dir, config);
-    const token = ensureToken(dir);
+    ensureToken(dir);
     console.log(`installation: ${dir}`);
     console.log(`config:       ${file}`);
     console.log(`listen:       http://${config.server.host}:${config.server.port}`);
-    console.log(`login link:   ${loginLink(config, token)}`);
-    console.log('              open it once in your browser; the token is kept there and in Settings');
+    console.log(`login link:   ${loginLink(config, createPairing(dir))}`);
+    console.log('              open it in your browser within 15 minutes; it works once (new one: spectrahub login)');
     if (config.server.host !== '127.0.0.1') {
       console.log('warning: bound to a public address — put a reverse proxy with TLS in front');
     }
@@ -191,7 +191,7 @@ Usage: spectrahub <command> [options]
         console.log('hint:  user service enabled — survives logout via lingering');
       }
       console.log(`open:  http://${config.server.host}:${config.server.port}`);
-      console.log(`login: ${loginLink(config, ensureToken(dir))}`);
+      console.log(`login: ${loginLink(config, createPairing(dir))}  (once, 15 min)`);
     } else if (action === 'uninstall') {
       const sysctl = system ? ['--system'] : ['--user'];
       spawnSync('systemctl', [...sysctl, 'disable', '--now', 'spectrahub']);

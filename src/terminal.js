@@ -30,10 +30,44 @@ export function allowedCommands() {
   return [...Object.keys(ALLOWED), 'pwd'];
 }
 
-// One link logs a browser in: the token rides in the #fragment, which never reaches the server or its logs.
-export function loginLink(config, token) {
+const PAIR_TTL_MS = 15 * 60_000;
+
+// A login link carries a one-time pairing code, never the token itself. It sits in the #fragment,
+// which browsers do not send to the server, and dies on first use or after 15 minutes.
+export function loginLink(config, code) {
   const base = (config.publicUrl || `http://${config.server.host}:${config.server.port}`).replace(/\/+$/, '');
-  return `${base}/terminal#token=${token}`;
+  return `${base}/terminal#pair=${code}`;
+}
+
+function pairFile(dir) {
+  return join(dir, 'pairing.json');
+}
+
+function readPairs(dir) {
+  try { return JSON.parse(readFileSync(pairFile(dir), 'utf8')).filter((p) => p.expires > Date.now() && !p.used); } catch { return []; }
+}
+
+function writePairs(dir, pairs) {
+  writeFileSync(pairFile(dir), JSON.stringify(pairs) + '\n', { mode: 0o600 });
+  chmodSync(pairFile(dir), 0o600);
+}
+
+export function createPairing(dir, ttlMs = PAIR_TTL_MS) {
+  ensureToken(dir);
+  const code = randomBytes(18).toString('base64url');
+  writePairs(dir, [...readPairs(dir), { hash: digest(code).toString('hex'), expires: Date.now() + ttlMs, used: false }]);
+  return code;
+}
+
+// Swaps a valid code for the owner token, once.
+export function redeemPairing(dir, code) {
+  if (typeof code !== 'string' || !code) return null;
+  const hash = digest(code).toString('hex');
+  const pairs = readPairs(dir);
+  const hit = pairs.find((p) => p.hash === hash);
+  if (!hit) return null;
+  writePairs(dir, pairs.filter((p) => p !== hit));
+  return ensureToken(dir);
 }
 
 export function tokenPath(dir) {

@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { start } from '../src/server.js';
-import { ensureToken, tokenPath } from '../src/terminal.js';
+import { createPairing, ensureToken, redeemPairing, tokenPath } from '../src/terminal.js';
 
 let server;
 let base;
@@ -89,20 +89,40 @@ test('the terminal page is served without its extension', async () => {
   assert.match(await res.text(), /terminal\.js/);
 });
 
-test('init creates the token and prints a login link with it in the fragment', async () => {
+test('a login link code buys the token once, then dies', async () => {
+  const code = createPairing(dir);
+  const pair = (c) => fetch(`${base}/api/terminal/pair`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: c }),
+  });
+  const first = await pair(code);
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).token, token);
+  assert.equal((await pair(code)).status, 401, 'second use is refused');
+  assert.equal((await pair('made-up')).status, 401);
+  assert.equal(redeemPairing(dir, createPairing(dir, -1)), null, 'expired code is refused');
+});
+
+test('a signed-in device can make a link for another one', async () => {
+  assert.equal((await fetch(`${base}/api/terminal/pair/new`, { method: 'POST' })).status, 401);
+  const res = await fetch(`${base}/api/terminal/pair/new`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(res.status, 200);
+  assert.equal(redeemPairing(dir, (await res.json()).code), token);
+});
+
+test('init creates the token and prints a one-time login link', async () => {
   const { execFileSync } = await import('node:child_process');
   const home = mkdtempSync(join(tmpdir(), 'spectrahub-init-'));
+  const cli = (...a) => execFileSync(process.execPath, ['bin/spectrahub.js', ...a], {
+    env: { ...process.env, SPECTRAHUB_HOME: home }, encoding: 'utf8',
+  });
   try {
-    const out = execFileSync(process.execPath, ['bin/spectrahub.js', 'init', '--url', 'https://hub.example.com/'], {
-      env: { ...process.env, SPECTRAHUB_HOME: home }, encoding: 'utf8',
-    });
-    const saved = ensureToken(home);
+    const out = cli('init', '--url', 'https://hub.example.com/');
     assert.equal(statSync(tokenPath(home)).mode & 0o777, 0o600);
-    assert.ok(out.includes(`https://hub.example.com/terminal#token=${saved}`), out);
-    const link = execFileSync(process.execPath, ['bin/spectrahub.js', 'login'], {
-      env: { ...process.env, SPECTRAHUB_HOME: home }, encoding: 'utf8',
-    });
-    assert.equal(link.trim(), `https://hub.example.com/terminal#token=${saved}`);
+    const code = /https:\/\/hub\.example\.com\/terminal#pair=([\w-]+)/.exec(out)?.[1];
+    assert.ok(code, out);
+    assert.ok(!out.includes(ensureToken(home)), 'the token itself is never printed by init');
+    assert.equal(redeemPairing(home, code), ensureToken(home));
+    assert.match(cli('login'), /^https:\/\/hub\.example\.com\/terminal#pair=[\w-]+\n$/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

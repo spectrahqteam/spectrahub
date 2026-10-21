@@ -15,13 +15,10 @@ const store = {
   clear() { try { localStorage.removeItem(KEY); } catch { /* nothing stored */ } },
 };
 
-// A login link (…/terminal#token=…) signs this browser in; the token leaves the address bar at once.
-const fromLink = new URLSearchParams(location.hash.slice(1)).get('token');
-if (fromLink) {
-  store.set(fromLink);
-  history.replaceState(null, '', location.pathname + location.search);
-}
-let token = fromLink || store.get();
+// A login link (…/terminal#pair=…) carries a one-time code; it leaves the address bar at once.
+const pairCode = new URLSearchParams(location.hash.slice(1)).get('pair');
+if (pairCode) history.replaceState(null, '', location.pathname + location.search);
+let token = store.get();
 let info = null;          // { user, host, cwdShort, commands }
 let mode = 'login';       // 'login' | 'shell' | 'busy'
 let running = null;       // AbortController of the running command
@@ -128,7 +125,25 @@ async function api(path, opts = {}) {
   return fetch(path, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${token}` } });
 }
 
+async function pair(code) {
+  try {
+    const res = await fetch('/api/terminal/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }),
+    });
+    if (res.ok) {
+      token = (await res.json()).token;
+      store.set(token);
+      line('to urządzenie jest zalogowane', 'note');
+    } else {
+      line('link logowania został już użyty albo wygasł — poproś o nowy (spectrahub login)', 'err');
+    }
+  } catch {
+    line('brak połączenia z serwerem', 'err');
+  }
+}
+
 async function connect() {
+  if (pairCode && !token) await pair(pairCode);
   if (!token) return askToken();
   let res;
   try { res = await api('/api/terminal/info'); } catch { line('brak połączenia z serwerem', 'err'); return askToken(); }
@@ -223,7 +238,7 @@ async function submit() {
     return // ---------- settings ----------
 const panel = document.getElementById('settings');
 const tokenField = document.getElementById('s-token');
-const linkFor = () => `${location.origin}/terminal#token=${token}`;
+
 function flash(btn, text) {
   const old = btn.textContent;
   btn.textContent = text;
@@ -249,7 +264,20 @@ document.getElementById('s-show').addEventListener('click', (e) => {
   e.currentTarget.textContent = shown ? 'pokaż' : 'ukryj';
 });
 document.getElementById('s-copy').addEventListener('click', (e) => copy(token, e.currentTarget));
-document.getElementById('s-link').addEventListener('click', (e) => copy(linkFor(), e.currentTarget));
+document.getElementById('s-link').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const shown = document.getElementById('s-linktext');
+  try {
+    const res = await api('/api/terminal/pair/new', { method: 'POST' });
+    if (!res.ok) throw new Error(String(res.status));
+    const link = `${location.origin}/terminal#pair=${(await res.json()).code}`;
+    shown.textContent = link;
+    shown.hidden = false;
+    await copy(link, btn);
+  } catch {
+    flash(btn, 'nie udało się');
+  }
+});
 document.getElementById('s-logout').addEventListener('click', () => { openSettings(false); builtins.logout(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) openSettings(false); });
 builtins.settings = () => openSettings(true);
@@ -317,7 +345,7 @@ screen.addEventListener('click', () => { if (!getSelection().toString() && mode 
 // ---------- settings ----------
 const panel = document.getElementById('settings');
 const tokenField = document.getElementById('s-token');
-const linkFor = () => `${location.origin}/terminal#token=${token}`;
+
 function flash(btn, text) {
   const old = btn.textContent;
   btn.textContent = text;
@@ -343,7 +371,20 @@ document.getElementById('s-show').addEventListener('click', (e) => {
   e.currentTarget.textContent = shown ? 'pokaż' : 'ukryj';
 });
 document.getElementById('s-copy').addEventListener('click', (e) => copy(token, e.currentTarget));
-document.getElementById('s-link').addEventListener('click', (e) => copy(linkFor(), e.currentTarget));
+document.getElementById('s-link').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const shown = document.getElementById('s-linktext');
+  try {
+    const res = await api('/api/terminal/pair/new', { method: 'POST' });
+    if (!res.ok) throw new Error(String(res.status));
+    const link = `${location.origin}/terminal#pair=${(await res.json()).code}`;
+    shown.textContent = link;
+    shown.hidden = false;
+    await copy(link, btn);
+  } catch {
+    flash(btn, 'nie udało się');
+  }
+});
 document.getElementById('s-logout').addEventListener('click', () => { openSettings(false); builtins.logout(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) openSettings(false); });
 builtins.settings = () => openSettings(true);
