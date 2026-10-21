@@ -5,9 +5,10 @@
 - [x] static shell with the launcher screen (`web/`)
 - [ ] screenshots in README
 
-## 0.2.0 — shell that runs
-- [ ] Node server serving `web/` + `/health`
-- [ ] install script: one command, prints the sslip.io URL
+## 0.2.0 — shell that runs (done)
+- [x] Node server serving `web/` + `/health`
+- [x] install path: `npm i -g`, `spectrahub init`, `spectrahub service install`
+- [x] smoke tests + CI on Node 20/22
 - [ ] SQLite bootstrap, owner account
 
 ## 0.3.0 — chat

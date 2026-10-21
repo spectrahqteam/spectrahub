@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "node bin/spectrahub.js serve",
-    "doctor": "node bin/spectrahub.js doctor"
+    "doctor": "node bin/spectrahub.js doctor",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"

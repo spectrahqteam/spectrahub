@@ -5,7 +5,7 @@ Chat with agents, run a terminal, browse files, watch servers, keep every decisi
 
 SpectraHub runs on a single small VPS. No SaaS, no telemetry, no external account required.
 
-> Status: **early scaffold (0.1.0)**. The repository is real; most modules are still design.
+> Status: **0.2.0** — installable and runnable; the command center itself is still being built.
 > Nothing here is production-ready yet — see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Why
@@ -22,13 +22,25 @@ Codex, OpenClaw, DSH/Hermes), and every state-changing action asks you first.
 4. **Readable over clever.** Plain HTML/CSS/JS frontend, small Node backend, no framework lock-in.
 5. **Tool names, not people names.** The UI speaks about runtimes, not about teammates.
 
-## Quick start (will work once 0.2.0 lands)
+## Install
+
+Requires Node.js 20 or newer.
 
 ```bash
-git clone https://github.com/spectrahqteam/spectrahub.git
-cd spectrahub
-# no build step for the shell, see docs/ARCHITECTURE.md
+npm install -g github:spectrahqteam/spectrahub
+spectrahub init
+spectrahub service install
 ```
+
+Then open `http://127.0.0.1:8787` (put nginx or Caddy in front for HTTPS).
+Full guide: [docs/INSTALL.md](docs/INSTALL.md).
+
+```bash
+spectrahub doctor    # checks the install, fails loudly
+```
+
+Status: **0.2.0** — server, CLI, health endpoint and service install work. Chat, terminal,
+files and servers are still design, see [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Repository layout
 
