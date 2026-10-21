@@ -21,8 +21,12 @@ process.stdin.on('end', () => {
   const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
   out({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'text' } } });
   for (const part of ['echo: ', last]) out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: part } } });
-  out({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: '/tmp/x' } }] } });
-  out({ type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0 });
+  out({ type: 'assistant', message: { id: 'm1', content: [{ type: 'thinking', thinking: 'najpierw przeczytam plik' }] } });
+  out({ type: 'assistant', message: { id: 'm1', content: [{ type: 'tool_use', id: 'tu1', name: 'Read', input: { file_path: '/tmp/x' } }] } });
+  out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu1', content: 'zawartość x', is_error: false }] } });
+  out({ type: 'assistant', message: { id: 'm2', content: [{ type: 'tool_use', id: 'tu2', name: 'Edit', input: { file_path: '/tmp/y', old_string: 'a', new_string: 'b' } }] } });
+  out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu2', content: [{ type: 'text', text: 'edited' }] }] } });
+  out({ type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0.01, duration_ms: 5, usage: { input_tokens: 10, output_tokens: 3 } });
   fs.writeFileSync(${JSON.stringify(join(dir, 'last-prompt.txt'))}, input);
 });
 `;
@@ -109,20 +113,32 @@ test('a turn streams the reply, then the agent resumes its own session', async (
   }).catch(() => {});
   await new Promise((r) => setTimeout(r, 100));
 
+  let s;
+  try {
   const sent = await api(`/api/sessions/${session.id}/send`, { method: 'POST', body: JSON.stringify({ to: ['claude'], text: 'pierwsza' }) });
   assert.equal(sent.status, 202);
-  let s = await waitIdle(session.id);
+  s = await waitIdle(session.id);
   const reply = s.log.at(-1);
   assert.equal(reply.who, 'claude');
   assert.equal(reply.s, 'echo: pierwsza');
-  assert.deepEqual(reply.tools, ['Read /tmp/x']);
   assert.equal(reply.status, 'done');
+  const steps = reply.items.filter((i) => i.k === 'step');
+  assert.deepEqual(steps.map((x) => [x.kind, x.name, x.status]), [['think', '', 'ok'], ['tool', 'Read', 'ok'], ['edit', 'Edit', 'ok']]);
+  assert.equal(steps[1].title, '/tmp/x');
+  assert.equal(steps[1].output, 'zawartość x');
+  assert.deepEqual(steps[2].diff, { path: '/tmp/y', old: 'a', new: 'b' });
+  assert.equal(steps[2].output, 'edited');
+  assert.deepEqual(reply.items[0], { k: 'text', s: 'echo: pierwsza' }, 'items keep the order they happened in');
+  assert.equal(reply.usage.cost, 0.01);
 
   await new Promise((r) => setTimeout(r, 50));
-  controller.abort();
-  await stream;
+  } finally {
+    controller.abort();  // an open event stream would keep the server from closing
+    await stream;
+  }
   assert.equal(events[0].type, 'snapshot');
   assert.ok(events.some((e) => e.type === 'delta' && e.s === 'pierwsza'));
+  assert.ok(events.some((e) => e.type === 'step' && e.step.name === 'Read' && e.step.status === 'running'), 'a step shows before its result');
   assert.ok(events.some((e) => e.type === 'end' && e.status === 'done'));
 
   await api(`/api/sessions/${session.id}/send`, { method: 'POST', body: JSON.stringify({ to: ['claude'], text: 'druga' }) });
@@ -139,4 +155,45 @@ test('sessions are listed and survive on disk', async () => {
   const { sessions } = await (await api('/api/sessions')).json();
   assert.ok(sessions.length >= 1);
   assert.equal(sessions[0].title, 'test');
+});
+
+test('adapters turn each runtime events into the same steps', async () => {
+  const { adapters } = await import('../src/agents.js');
+  const run = (a, lines, method = 'line') => {
+    const out = [];
+    const self = Object.create(adapters[a]);
+    for (const l of lines) self[method](l, (e) => out.push(e));
+    return out;
+  };
+  // Codex: command with output and exit code, wrapper removed
+  const cx = run('codex', [
+    { type: 'item.started', item: { id: 'i1', type: 'command_execution', command: "/bin/bash -c 'echo hi && ls'", status: 'in_progress' } },
+    { type: 'item.completed', item: { id: 'i1', type: 'command_execution', command: "/bin/bash -c 'echo hi && ls'", aggregated_output: 'hi\n', exit_code: 2 } },
+    { type: 'item.started', item: { id: 'i2', type: 'command_execution', command: '/bin/bash -lc uptime' } },
+    { type: 'turn.completed', usage: { input_tokens: 5, output_tokens: 1, reasoning_output_tokens: 1 } },
+  ]);
+  assert.equal(cx.splice(2, 1)[0].title, 'uptime', 'unquoted shell wrapper is removed too');
+  assert.deepEqual(cx[0], { type: 'step', id: 'i1', kind: 'tool', name: 'bash', title: 'echo hi && ls' });
+  assert.deepEqual(cx[1], { type: 'step-end', id: 'i1', ok: false, exit: 2, output: 'hi\n' });
+  assert.deepEqual(cx[2], { type: 'usage', input: 5, output: 2 });
+  // DeepSeek Harness: thinking, tool call and result joined by callId, tokens per step
+  const ds = run('dsh', [
+    { type: 'thinking', text: 'plan' },
+    { type: 'tool_call', callId: 'c1', tool: 'bash', input: { command: 'uptime' } },
+    { type: 'tool_result', callId: 'c1', status: 'completed', result: 'up 9 days' },
+    { type: 'status', phase: 'step_end', usage: { inputTokens: 3, outputTokens: 2, cacheReadTokens: 4 } },
+  ]);
+  assert.equal(ds[0].kind, 'think');
+  assert.deepEqual(ds[1], { type: 'step', id: 'c1', kind: 'tool', name: 'bash', title: 'uptime' });
+  assert.deepEqual(ds[2], { type: 'step-end', id: 'c1', ok: true, output: 'up 9 days' });
+  assert.deepEqual(ds[3], { type: 'usage', input: 7, output: 2 });
+  // OpenClaw: steps read from its session file
+  const oc = run('openclaw', [
+    { type: 'message', id: 'x', message: { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: { path: '/etc/hostname' } }] } },
+    { type: 'message', id: 'y', message: { role: 'toolResult', toolCallId: 't1', isError: false, content: [{ type: 'text', text: 'v5' }] } },
+  ], 'tail');
+  assert.deepEqual(oc, [
+    { type: 'step', id: 't1', kind: 'tool', name: 'read', title: '/etc/hostname' },
+    { type: 'step-end', id: 't1', ok: true, output: 'v5' },
+  ]);
 });

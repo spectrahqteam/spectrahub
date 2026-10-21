@@ -17,6 +17,7 @@
 - [x] agent scanner (Claude Code, Codex, OpenClaw, DeepSeek Harness) — PATH, running systemd units, install folders
 - [x] "start sesja": pick agents, each gets a new runtime session, one shared conversation
 - [x] chat in the terminal window: `@agent` picks and keeps the recipient, `@all`, `/stop`, streamed replies
+- [x] live view of the work: every tool with its output and exit code, diffs, thinking, plan, tokens and cost
 - [ ] inline approval cards (TAK / NIE in the stream)
 - [ ] tabs, one session per tab, drafts kept per tab
 - [ ] runtime adapters: at least one working end-to-end

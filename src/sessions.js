@@ -119,7 +119,9 @@ export async function send(config, id, { to, text }) {
     const prompt = others
       ? `Rozmowa zespołowa w SpectraHub. Od Twojej ostatniej odpowiedzi:\n${others}\n\n---\nWiadomość do Ciebie:\n${text}`
       : text;
-    const reply = add(config, s, { who: agent, s: '', tools: [], status: 'running' });
+    // The reply is a timeline: text and steps (tools, edits, thinking, plan) in the order they happened.
+    const reply = add(config, s, { who: agent, s: '', items: [], status: 'running' });
+    const began = Date.now();
     if (!rt) {
       reply.status = 'error';
       reply.error = 'agent niedostępny na tym serwerze';
@@ -129,13 +131,33 @@ export async function send(config, id, { to, text }) {
     setState(s, agent, 'busy');
     const stop = turn(rt, { ref: st.ref, started: st.started, prompt, cwd: s.cwd }, (e) => {
       if (e.type === 'text') {
-        const s1 = e.block && reply.s && !reply.s.endsWith('\n') ? '\n' + e.s : e.s;
+        const last = reply.items.at(-1);
+        const s1 = last?.k === 'text' && e.block && last.s && !last.s.endsWith('\n') ? '\n' + e.s : e.s;
         if (!s1) return;
-        reply.s += s1;
+        if (last?.k === 'text') last.s += s1;
+        else reply.items.push({ k: 'text', s: s1 });
+        reply.s += (reply.s && !reply.s.endsWith('\n') && last?.k !== 'text' ? '\n' : '') + s1;
         publish(s.id, { type: 'delta', n: reply.n, s: s1 });
-      } else if (e.type === 'tool') {
-        reply.tools.push(e.s);
-        publish(s.id, { type: 'tool', n: reply.n, s: e.s });
+      } else if (e.type === 'step' || e.type === 'step-end') {
+        let step = reply.items.find((i) => i.k === 'step' && i.id === e.id);
+        if (!step) {
+          step = { k: 'step', id: e.id, kind: e.kind ?? 'tool', name: e.name ?? '', title: '', status: 'running', t0: Date.now() };
+          reply.items.push(step);
+        }
+        if (e.type === 'step') {
+          for (const key of ['kind', 'name', 'title', 'text', 'diff', 'todos']) if (e[key] != null && e[key] !== '') step[key] = e[key];
+          if (e.done) step.status = 'ok';
+        } else {
+          step.status = e.ok === false ? 'error' : 'ok';
+          if (e.output != null) step.output = e.output;
+          if (e.exit != null) step.exit = e.exit;
+          step.ms = Date.now() - step.t0;
+        }
+        publish(s.id, { type: 'step', n: reply.n, step });
+      } else if (e.type === 'usage') {
+        const { type: _t, ...u } = e;
+        reply.usage = { ...reply.usage, ...Object.fromEntries(Object.entries(u).filter(([, v]) => v != null)) };
+        publish(s.id, { type: 'usage', n: reply.n, usage: reply.usage });
       } else if (e.type === 'ref') {
         st.ref = e.ref;
       } else if (e.type === 'error') {
@@ -145,7 +167,9 @@ export async function send(config, id, { to, text }) {
         if (st.ref) st.started = true;
         reply.s = reply.s.trimEnd();
         reply.status = reply.error ? 'error' : 'done';
-        if (e.cost != null) reply.cost = e.cost;
+        reply.ms = Date.now() - began;
+        for (const i of reply.items) if (i.k === 'step' && i.status === 'running') i.status = reply.error ? 'error' : 'ok';
+        publish(s.id, { type: 'usage', n: reply.n, usage: reply.usage ?? {}, ms: reply.ms });
         reply.done = new Date().toISOString();
         s.updatedAt = reply.done;
         publish(s.id, { type: 'end', n: reply.n, status: reply.status, error: reply.error ?? null });

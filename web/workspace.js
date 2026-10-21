@@ -324,23 +324,102 @@ function entryEl(e) {
   d.style.setProperty('--c', color(e.who));
   const who = el('span', 'who');
   who.append(logo(e.who), `[${e.who}]`);
-  d.append(who, ' ');
-  const tools = el('span', 'tools');
-  for (const t of e.tools ?? []) tools.append(el('span', null, t));
-  const body = el('span', 'body', e.s);
-  d.append(tools, body);
-  d._tools = tools;
-  d._body = body;
+  d.append(who);
+  const tl = el('div', 'tl');
+  d.append(tl);
+  d._tl = tl;
+  d._steps = new Map();
+  d._last = null;       // the text item being written to, if the last item is text
+  d._meta = el('div', 'meta');
+  d.append(d._meta);
+  if (e.items) {
+    for (const it of e.items) it.k === 'text' ? addText(d, it.s) : upsertStep(d, it);
+  } else {
+    // sessions from before the timeline: tool lines, then the text
+    for (const t of e.tools ?? []) upsertStep(d, { id: t, kind: 'tool', name: t.split(' ')[0], title: t.split(' ').slice(1).join(' '), status: 'ok' });
+    addText(d, e.s);
+  }
+  d._usage = e.usage ?? null;
+  d._ms = e.ms ?? null;
   finish(d, e.status, e.error);
   return d;
 }
 
+function addText(d, text) {
+  if (!text) return;
+  if (!d._last) { d._last = el('div', 'body'); d._tl.append(d._last); }
+  d._last.textContent += text;
+}
+
+const KIND_ICON = { tool: '▸', edit: '±', think: '∴', todo: '☰' };
+
+// One step of the agent's work: a line you can open for the output, the diff or the thinking.
+function upsertStep(d, st) {
+  let row = d._steps.get(st.id);
+  if (!row) {
+    row = el('div', 'step');
+    const head = el('button', 'st-head');
+    head.type = 'button';
+    head.addEventListener('click', () => row.classList.toggle('open'));
+    row.append(head, el('div', 'st-body'));
+    d._steps.set(st.id, row);
+    d._tl.append(row);
+    d._last = null;
+  }
+  const open = row.classList.contains('open') || st.kind === 'todo';
+  row.className = `step k-${st.kind} s-${st.status ?? 'running'}${open ? ' open' : ''}`;
+  const [head, body] = row.children;
+  const label = st.kind === 'think' ? 'myśli' : st.kind === 'todo' ? 'plan' : st.name || st.kind;
+  const status = st.status === 'running' ? el('span', 'st-spin')
+    : el('span', 'st-ok', st.status === 'error' ? `✗${st.exit != null ? ' ' + st.exit : ''}` : '✓');
+  // under 50 ms means the runtime reported start and end together: no honest duration to show
+  const time = st.ms >= 50 ? el('span', 'st-ms', st.ms < 1000 ? `${st.ms} ms` : `${(st.ms / 1000).toFixed(1)} s`) : '';
+  const todos = st.todos ?? [];
+  const summary = st.kind === 'think' ? (st.text ?? '').split('\n')[0]
+    : st.kind === 'todo' ? `${todos.filter((t) => t.state === 'completed').length}/${todos.length}` : st.title ?? '';
+  head.replaceChildren(el('span', 'st-ic', KIND_ICON[st.kind] ?? '▸'), el('b', 'st-name', label), el('span', 'st-title', summary), time, status);
+  body.replaceChildren();
+  if (st.kind === 'todo') {
+    for (const t of todos) body.append(el('div', `todo t-${t.state}`, `${t.state === 'completed' ? '☑' : t.state === 'in_progress' ? '◐' : '☐'} ${t.text}`));
+  } else if (st.kind === 'think') {
+    body.append(el('div', 'st-think', st.text ?? ''));
+  } else {
+    if (st.kind === 'tool' && st.title) body.append(el('div', 'st-cmd', st.title));
+    if (st.diff) body.append(diffEl(st.diff));
+    if (st.output) body.append(el('pre', 'st-out', st.output));
+    else if (!st.diff && st.status !== 'running') body.append(el('div', 'st-none', '(brak wyniku)'));
+  }
+}
+
+function diffEl(df) {
+  const box = el('div', 'diff');
+  box.append(el('div', 'df-path', `${df.created ? 'nowy plik ' : ''}${df.path}`));
+  const lines = (txt, cls, mark) => { for (const l of txt.split('\n').slice(0, 200)) box.append(el('div', cls, `${mark} ${l}`)); };
+  if (df.old) lines(df.old, 'df-del', '-');
+  if (df.new) lines(df.new, 'df-add', '+');
+  return box;
+}
+
+function renderMeta(d, status) {
+  const steps = [...d._steps.values()].filter((r) => !r.classList.contains('k-think')).length;
+  const u = d._usage ?? {};
+  const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+  const parts = [];
+  if (steps) parts.push(`${steps} ${steps === 1 ? 'krok' : steps < 5 ? 'kroki' : 'kroków'}`);
+  if (d._ms != null) parts.push(`${(d._ms / 1000).toFixed(1)} s`);
+  if (u.input || u.output) parts.push(`${k(u.input ?? 0)} → ${k(u.output ?? 0)} tok`);
+  if (u.cost != null) parts.push(`$${Number(u.cost).toFixed(2)}`);
+  d._meta.textContent = parts.length ? (status === 'running' ? 'w toku · ' : '') + parts.join(' · ') : '';
+}
+
 function finish(d, status, error) {
-  d.querySelector('.live')?.remove();
-  d.querySelector('.errline')?.remove();
-  if (status === 'running') d.append(el('span', 'live'));
-  if (error) d.append(el('span', 'errline', (d._body?.textContent ? '\n' : '') + error));
-  if (status === 'done' && !d._body?.textContent && !error) d._body.textContent = '(bez odpowiedzi tekstowej)';
+  if (!d._tl) return;
+  d.querySelector(':scope > .live')?.remove();
+  d.querySelector(':scope > .errline')?.remove();
+  if (status === 'running') d._meta.before(el('span', 'live'));
+  if (error) d._meta.before(el('div', 'errline', error));
+  if (status === 'done' && !d._tl.querySelector('.body') && !error && !d._steps.size) addText(d, '(bez odpowiedzi tekstowej)');
+  renderMeta(d, status);
 }
 
 function renderLog(s) {
@@ -369,10 +448,13 @@ function onEvent(e) {
     stick(() => chatOut.append(d));
   } else if (e.type === 'delta') {
     const d = chat.entries.get(e.n);
-    if (d?._body) stick(() => { d._body.textContent += e.s; });
-  } else if (e.type === 'tool') {
+    if (d?._tl) stick(() => addText(d, e.s));
+  } else if (e.type === 'step') {
     const d = chat.entries.get(e.n);
-    if (d?._tools) stick(() => d._tools.append(el('span', null, e.s)));
+    if (d?._tl) stick(() => { upsertStep(d, e.step); renderMeta(d, 'running'); });
+  } else if (e.type === 'usage') {
+    const d = chat.entries.get(e.n);
+    if (d?._tl) { d._usage = e.usage; if (e.ms != null) d._ms = e.ms; renderMeta(d, e.ms != null ? 'done' : 'running'); }
   } else if (e.type === 'end') {
     const d = chat.entries.get(e.n);
     if (d) stick(() => finish(d, e.status, e.error));

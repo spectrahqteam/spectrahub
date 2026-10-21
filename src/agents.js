@@ -2,9 +2,9 @@
 // Every adapter keeps the runtime's own session, so the next turn continues the same conversation.
 import { spawn, execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { basename, delimiter, dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
 // What the scanner looks for, on any server: commands on PATH, then any running systemd service
 // (system or user) whose program belongs to the runtime's npm package — recognised by package
@@ -130,35 +130,94 @@ export async function scan({ fresh = false } = {}) {
 
 const short = (s, n = 160) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
-// Claude Code: streamed text deltas, tool calls as one-line notes. SpectraHub only opens a window to
-// the agent: its own settings, instructions and hooks apply as they would in a terminal.
+// Long tool output keeps its head and tail, like a terminal you scroll back in.
+export function clip(s, n = 6000) {
+  s = String(s ?? '');
+  if (s.length <= n) return s;
+  const half = Math.floor(n / 2);
+  return `${s.slice(0, half)}\n… (pominięto ${s.length - n} znaków) …\n${s.slice(-half)}`;
+}
+
+// One line saying what a tool is doing, from whatever its input calls the thing.
+function titleOf(input) {
+  const i = input ?? {};
+  const t = i.command ?? i.cmd ?? i.file_path ?? i.path ?? i.filePath ?? i.pattern ?? i.url ?? i.query ?? i.description;
+  return short(String(t ?? (Object.keys(i).length ? JSON.stringify(i) : '')).replace(/\s+/g, ' ').trim(), 200);
+}
+
+// A file edit as before/after text, when the tool input carries it.
+function diffOf(input) {
+  const i = input ?? {};
+  const path = i.file_path ?? i.path ?? i.filePath ?? null;
+  const pick = (...keys) => keys.map((k) => i[k]).find((v) => typeof v === 'string');
+  const oldText = pick('old_string', 'oldText', 'old_str', 'old');
+  const newText = pick('new_string', 'newText', 'new_str', 'new');
+  if (path && oldText != null && newText != null) return { path, old: clip(oldText, 4000), new: clip(newText, 4000) };
+  if (Array.isArray(i.edits) && path) {
+    return { path, old: clip(i.edits.map((e) => e.old_string ?? '').join('\n⋯\n'), 4000), new: clip(i.edits.map((e) => e.new_string ?? '').join('\n⋯\n'), 4000) };
+  }
+  const content = pick('content', 'file_text', 'text');
+  if (path && content != null) return { path, old: '', new: clip(content, 4000), created: true };
+  return null;
+}
+
+// Tool call → step; edits carry a diff, todo tools carry the list.
+function toolStep(id, name, input) {
+  const step = { id, kind: 'tool', name, title: titleOf(input) };
+  const diff = diffOf(input);
+  if (diff) { step.kind = 'edit'; step.diff = diff; step.title = diff.path; }
+  const todos = input?.todos ?? input?.items;
+  if (/todo/i.test(name) && Array.isArray(todos)) {
+    step.kind = 'todo';
+    step.todos = todos.map((t) => ({ text: String(t.content ?? t.text ?? t.title ?? ''), state: t.status ?? (t.completed ? 'completed' : 'pending') }));
+  }
+  return step;
+}
+
+const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text ?? '').join('') : c == null ? '' : JSON.stringify(c));
+
+// Claude Code: text deltas, every tool call with its result, thinking, todo list and cost.
+// SpectraHub only opens a window to the agent: its own settings, instructions and hooks apply.
 const claude = {
   argv(ref, started) {
     return ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--permission-mode', 'acceptEdits',
       ...(started ? ['--resume', ref] : ['--session-id', ref]),
-      '--allowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'];
+      '--allowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'TodoWrite'];
   },
   stdin: true,
   line(d, emit) {
-    if (d.type === 'stream_event' && d.event?.type === 'content_block_delta' && d.event.delta?.type === 'text_delta') {
-      emit({ type: 'text', s: d.event.delta.text });
-    } else if (d.type === 'stream_event' && d.event?.type === 'content_block_start' && d.event.content_block?.type === 'text') {
-      emit({ type: 'text', s: '', block: true });
+    const ev = d.type === 'stream_event' ? d.event : null;
+    if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') emit({ type: 'text', s: ev.delta.text });
+    else if (ev?.type === 'content_block_start' && ev.content_block?.type === 'text') emit({ type: 'text', s: '', block: true });
+    else if (ev?.type === 'content_block_start' && ev.content_block?.type === 'tool_use') {
+      emit({ type: 'step', id: ev.content_block.id, kind: 'tool', name: ev.content_block.name, title: '' });
     } else if (d.type === 'assistant') {
       for (const c of d.message?.content ?? []) {
-        if (c.type !== 'tool_use') continue;
-        const i = c.input ?? {};
-        emit({ type: 'tool', s: `${c.name} ${short(String(i.command ?? i.file_path ?? i.pattern ?? i.url ?? i.description ?? ''))}`.trim() });
+        if (c.type === 'tool_use') emit({ type: 'step', ...toolStep(c.id, c.name, c.input) });
+        else if (c.type === 'thinking' && c.thinking) emit({ type: 'step', id: `think-${d.message.id ?? ''}-${c.thinking.length}`, kind: 'think', text: clip(c.thinking, 8000), done: true });
+      }
+    } else if (d.type === 'user') {
+      for (const c of Array.isArray(d.message?.content) ? d.message.content : []) {
+        if (c.type === 'tool_result') emit({ type: 'step-end', id: c.tool_use_id, ok: !c.is_error, output: clip(textOf(c.content)) });
       }
     } else if (d.type === 'result') {
+      const u = d.usage ?? {};
+      emit({ type: 'usage', input: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0), output: u.output_tokens ?? 0, cost: d.total_cost_usd ?? null, ms: d.duration_ms ?? null });
       if (d.is_error) emit({ type: 'error', s: String(d.result ?? d.subtype ?? 'error') });
-      emit({ type: 'done', cost: d.total_cost_usd ?? null });
+      emit({ type: 'done' });
     }
   },
 };
 
-// Codex: whole messages and command steps; the thread id becomes our session reference.
+// `/bin/bash -c 'cmd'` → `cmd`, the way it was typed.
+function unwrap(command) {
+  const c = String(command ?? '').trim();
+  const m = /^(?:\/usr)?\/bin\/(?:ba|z)?sh\s+-l?c\s+(?:(['"])([\s\S]*)\1|([\s\S]+))$/.exec(c);
+  return m ? (m[2] ?? m[3]).replace(/'"'"'/g, "'") : c;
+}
+
+// Codex: messages, commands with their output and exit code, file changes, plan and reasoning.
 const codex = {
   argv(ref, started) {
     const common = ['--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check'];
@@ -166,56 +225,99 @@ const codex = {
   },
   stdin: true,
   line(d, emit) {
+    const it = d.item;
     if (d.type === 'thread.started') emit({ type: 'ref', ref: d.thread_id });
-    else if (d.type === 'item.started' && d.item?.type === 'command_execution') emit({ type: 'tool', s: `bash ${short(d.item.command ?? '')}` });
-    else if (d.type === 'item.completed' && d.item?.type === 'agent_message') emit({ type: 'text', s: d.item.text + '\n', block: true });
-    else if (d.type === 'item.completed' && d.item?.type === 'file_change') emit({ type: 'tool', s: `edit ${short((d.item.changes ?? []).map((c) => c.path).join(', '))}` });
-    else if (d.type === 'error' || d.type === 'turn.failed') emit({ type: 'error', s: String(d.message ?? d.error?.message ?? 'error') });
-    else if (d.type === 'turn.completed') emit({ type: 'done' });
+    else if (it?.type === 'agent_message' && d.type === 'item.completed') emit({ type: 'text', s: it.text.trimEnd(), block: true });
+    else if (it?.type === 'command_execution') {
+      if (d.type === 'item.started') emit({ type: 'step', id: it.id, kind: 'tool', name: 'bash', title: short(unwrap(it.command), 200) });
+      else if (d.type === 'item.completed') emit({ type: 'step-end', id: it.id, ok: it.exit_code === 0, exit: it.exit_code, output: clip(it.aggregated_output) });
+    } else if (it?.type === 'reasoning' && d.type === 'item.completed' && it.text) {
+      emit({ type: 'step', id: it.id, kind: 'think', text: clip(it.text, 8000), done: true });
+    } else if (it?.type === 'file_change') {
+      emit({ type: 'step', id: it.id, kind: 'edit', name: 'edit', title: (it.changes ?? []).map((c) => `${c.kind ?? ''} ${c.path}`.trim()).join(', ') });
+      if (d.type === 'item.completed') emit({ type: 'step-end', id: it.id, ok: it.status !== 'failed' });
+    } else if (it?.type === 'todo_list') {
+      emit({ type: 'step', id: it.id, kind: 'todo', name: 'plan', todos: (it.items ?? []).map((t) => ({ text: t.text, state: t.completed ? 'completed' : 'pending' })) });
+    } else if (it?.type === 'mcp_tool_call' || it?.type === 'web_search') {
+      if (d.type === 'item.started') emit({ type: 'step', id: it.id, kind: 'tool', name: it.type === 'web_search' ? 'web' : `${it.server}.${it.tool}`, title: titleOf(it.arguments ?? { query: it.query }) });
+      else if (d.type === 'item.completed') emit({ type: 'step-end', id: it.id, ok: it.status !== 'failed', output: clip(textOf(it.result?.content ?? it.result ?? '')) });
+    } else if (d.type === 'error' || d.type === 'turn.failed') emit({ type: 'error', s: String(d.message ?? d.error?.message ?? 'error') });
+    else if (d.type === 'turn.completed') {
+      emit({ type: 'usage', input: d.usage?.input_tokens ?? 0, output: (d.usage?.output_tokens ?? 0) + (d.usage?.reasoning_output_tokens ?? 0) });
+      emit({ type: 'done' });
+    }
   },
 };
 
-// DeepSeek Harness: the headless profile writes run events; the session id continues the talk.
+// DeepSeek Harness: thinking, tool calls with results and tokens per step, from the headless profile.
 const dsh = {
   argv(ref, started) {
     return ['--profile', 'headless', '--json', ...(started ? ['--session-id', ref] : []), '-'];
   },
   stdin: true,
   line(d, emit) {
+    this.n ??= 0;
+    this.usage ??= { input: 0, output: 0 };
     if (d.type === 'session') emit({ type: 'ref', ref: d.sessionId });
-    else if (d.type === 'text' && d.text) { this.said = true; emit({ type: 'text', s: d.text }); }
+    else if (d.type === 'thinking' && d.text) emit({ type: 'step', id: `think-${this.n++}`, kind: 'think', text: clip(d.text, 8000), done: true });
+    else if (d.type === 'text' && d.text) { this.said = true; emit({ type: 'text', s: d.text, block: true }); }
     else if (d.type === 'final' && d.text && !this.said) emit({ type: 'text', s: d.text, block: true });
-    else if (/tool/.test(d.type ?? '')) emit({ type: 'tool', s: short(`${d.name ?? d.tool ?? d.type} ${d.input?.command ?? d.input?.path ?? d.summary ?? ''}`.trim()) });
+    else if (d.type === 'tool_call') emit({ type: 'step', ...toolStep(d.callId, d.tool, d.input) });
+    else if (d.type === 'tool_result') emit({ type: 'step-end', id: d.callId, ok: d.status === 'completed', output: clip(textOf(d.result)) });
     else if (d.type === 'error') emit({ type: 'error', s: String(d.message ?? d.error ?? 'error') });
-    else if (d.type === 'status' && d.phase === 'turn_end') {
+    else if (d.type === 'status' && d.phase === 'step_end' && d.usage) {
+      this.usage.input += (d.usage.inputTokens ?? 0) + (d.usage.cacheReadTokens ?? 0);
+      this.usage.output += d.usage.outputTokens ?? 0;
+      emit({ type: 'usage', ...this.usage });
+    } else if (d.type === 'status' && d.phase === 'turn_end') {
       if (d.reason?.kind && d.reason.kind !== 'completed') emit({ type: 'error', s: `tura zakończona: ${d.reason.kind}` });
       emit({ type: 'done' });
     }
   },
 };
 
-// OpenClaw: one JSON document at the end; the reply stays here, nothing is delivered to channels.
+// OpenClaw: the answer comes as one JSON document at the end, so the steps are read live from the
+// session file the agent writes as it works. Nothing is delivered to channels.
 const openclaw = {
   argv(ref, _started, { agent, file }) {
     return ['agent', '--agent', agent, '--session-id', ref, '--message-file', file, '--json', '--timeout', '600'];
   },
   stdin: false,
+  tailFile(ref, rt) {
+    const home = process.env.OPENCLAW_HOME ?? join(homedir(), '.openclaw');
+    return join(home, 'agents', rt.agent, 'sessions', `${ref}.jsonl`);
+  },
+  tail(d, emit) {
+    const m = d.type === 'message' ? d.message : null;
+    if (!m) return;
+    if (m.role === 'assistant') {
+      for (const c of Array.isArray(m.content) ? m.content : []) {
+        if (c.type === 'toolCall') emit({ type: 'step', ...toolStep(c.id, c.name, c.arguments) });
+        else if (c.type === 'thinking' && (c.thinking ?? c.text)) emit({ type: 'step', id: `think-${d.id}`, kind: 'think', text: clip(c.thinking ?? c.text, 8000), done: true });
+      }
+    } else if (m.role === 'toolResult') {
+      emit({ type: 'step-end', id: m.toolCallId, ok: !m.isError, output: clip(textOf(m.content)) });
+    }
+  },
   whole(text, emit) {
     let d;
     try { d = JSON.parse(text); } catch { return emit({ type: 'error', s: short(text.trim() || 'brak odpowiedzi', 400) }); }
-    for (const p of d.result?.payloads ?? []) if (p.text) emit({ type: 'text', s: p.text + '\n', block: true });
+    for (const p of d.result?.payloads ?? []) if (p.text) emit({ type: 'text', s: p.text.trimEnd(), block: true });
+    const u = d.result?.meta?.agentMeta?.usage;
+    if (u) emit({ type: 'usage', input: (u.input ?? 0) + (u.cacheRead ?? 0), output: u.output ?? 0, ms: d.result?.meta?.durationMs ?? null });
     if (d.status !== 'ok') emit({ type: 'error', s: String(d.summary ?? d.status) });
     emit({ type: 'done' });
   },
 };
 
 const ADAPTERS = { claude, codex, openclaw, dsh };
+export { ADAPTERS as adapters };  // for tests
 
 export function newRef(id) {
   return id === 'codex' || id === 'dsh' ? null : id === 'openclaw' ? `spectrahub-${randomUUID()}` : randomUUID();
 }
 
-// Runs one turn. `emit` receives {type: text|tool|error|ref|done}; the returned function stops it.
+// Runs one turn. `emit` receives {type: text|step|step-end|usage|error|ref|done}; the returned function stops it.
 export function turn(rt, { ref, started, prompt, cwd }, emit) {
   const a = Object.create(ADAPTERS[rt.id]);  // per-run state (e.g. dsh: did text already stream)
   let file = null;
@@ -232,6 +334,31 @@ export function turn(rt, { ref, started, prompt, cwd }, emit) {
     cwd: l?.cwd ?? cwd, env, stdio: [a.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
   if (a.stdin) child.stdin.end(prompt);
+
+  // Live steps from a file the agent appends to while it works (OpenClaw).
+  let tailTimer = null;
+  let poll = () => {};
+  if (a.tailFile) {
+    const path = a.tailFile(ref, rt);
+    let offset = existsSync(path) ? statSync(path).size : 0;
+    let rest = '';
+    poll = () => {
+      if (!existsSync(path)) return;
+      const size = statSync(path).size;
+      if (size <= offset) return;
+      const fd = openSync(path, 'r');
+      const chunk = Buffer.alloc(size - offset);
+      readSync(fd, chunk, 0, chunk.length, offset);
+      closeSync(fd);
+      offset = size;
+      const lines = (rest + chunk.toString('utf8')).split('\n');
+      rest = lines.pop();
+      for (const line of lines) {
+        try { a.tail(JSON.parse(line), (e) => emit(e)); } catch { /* partial or foreign line */ }
+      }
+    };
+    tailTimer = setInterval(poll, 400);
+  }
   let done = false;
   let buf = '';
   let all = '';
@@ -253,6 +380,7 @@ export function turn(rt, { ref, started, prompt, cwd }, emit) {
   child.stderr.on('data', (c) => { err = (err + c.toString('utf8')).slice(-2000); });
   child.on('error', (e) => { emit({ type: 'error', s: e.message }); finish({ type: 'done' }); });
   child.on('close', (code, signal) => {
+    if (tailTimer) { clearInterval(tailTimer); poll(); }
     if (file) rmSync(file, { force: true });
     if (a.whole) a.whole(all, relay);
     if (!done) {
