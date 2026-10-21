@@ -219,6 +219,7 @@ export function createServer(config) {
 export function start(config) {
   const { host, port } = config.server;
   const server = createServer(config);
+  scan().catch(() => {});  // warm the agent scan so the first "start sesja" does not wait
   return new Promise((ok, fail) => {
     server.once('error', fail);
     server.listen(port, host, () => ok(server));

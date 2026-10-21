@@ -13,8 +13,10 @@
 
 ## 0.3.0 — terminal and chat (brief: `docs/BRIEF-terminal-chat.md`)
 - [x] read-only terminal: exact command allowlist, SSE stream, Ubuntu-like prompt, owner token
-- [ ] agent sessions as terminal tabs
-- [ ] chat as a stream in the same window (`@agent`, `/command`)
+- [x] workspace: rail + panel + window (rail fixed on phones, panel slides over)
+- [x] agent scanner (Claude Code, Codex, OpenClaw; Hermes and DeepSeek detected)
+- [x] "start sesja": pick agents, each gets a new runtime session, one shared conversation
+- [x] chat in the terminal window: `@agent` picks and keeps the recipient, `@all`, `/stop`, streamed replies
 - [ ] inline approval cards (TAK / NIE in the stream)
 - [ ] tabs, one session per tab, drafts kept per tab
 - [ ] runtime adapters: at least one working end-to-end
