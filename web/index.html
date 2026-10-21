@@ -2,55 +2,89 @@
 <html lang="pl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0a">
 <title>SpectraHub</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="appwin">
+<main class="appwin">
   <header class="winbar">
     <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
-    <span class="wintitle">spectrahub</span>
-    <span class="winacts">0.1.0 · MIT</span>
+    <span class="wintitle">spectra — start</span>
+    <span class="winacts">v0.2.0</span>
   </header>
 
   <div class="shell">
-    <aside class="rail" aria-label="Menu">
+    <aside class="rail" aria-label="Sekcje">
       <div class="brand">
         <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.4 12 L14.8 5.2 L14.8 18.8 Z M17.2 6.6 L21.8 6.6 L21.8 8.8 L17.2 8.8 Z M17.2 11.2 L21.8 11.2 L21.8 13.4 L17.2 13.4 Z M17.2 15.8 L21.8 15.8 L21.8 18 L17.2 18 Z"/></svg></span>
         <span class="bt"><b>SPECTRA</b><span>HUB</span></span>
       </div>
       <p class="sec">Praca</p>
-      <a class="it" href="#"><span class="ico">◆</span>Rozmowy<em>—</em></a>
-      <a class="it" href="#"><span class="ico">›_</span>Terminal<em>—</em></a>
+      <a class="it" href="#chat"><span class="ico">◈</span>Rozmowy<em>—</em></a>
+      <a class="it" href="#terminal"><span class="ico">›_</span>Terminal<em>—</em></a>
       <p class="sec">Sterowanie</p>
-      <a class="it" href="#"><span class="ico">✳</span>Agenci<em>—</em></a>
-      <a class="it" href="#"><span class="ico">▤</span>Serwery<em>—</em></a>
+      <a class="it" href="#agents"><span class="ico">✳</span>Agenci<em>—</em></a>
+      <a class="it" href="#servers"><span class="ico">▤</span>Serwery<em>—</em></a>
       <p class="sec">Kod i pliki</p>
-      <a class="it" href="#"><span class="ico">⑂</span>GitHub<em>—</em></a>
-      <a class="it" href="#"><span class="ico">▭</span>Pliki</a>
-      <div class="tail">3 / 4 online<div class="who"><i></i>właściciel · VPS</div></div>
+      <a class="it" href="#github"><span class="ico">⑂</span>GitHub<em>—</em></a>
+      <a class="it" href="#files"><span class="ico">▭</span>Pliki<em>—</em></a>
+      <p class="sec">Produkty</p>
+      <a class="it" href="#studio"><span class="ico">▦</span>SpectraStudio</a>
+      <div class="tail">
+        <span class="pill"><i class="dot ok"></i>4 / 4 online</span>
+        <span class="who"><i class="ava"></i>właściciel · VPS</span>
+      </div>
     </aside>
 
-    <main class="main">
+    <section class="main">
       <div class="hero">
-        <span class="big"><svg viewBox="0 0 24 24"><path d="M3.4 12 L14.8 5.2 L14.8 18.8 Z M17.2 6.6 L21.8 6.6 L21.8 8.8 L17.2 8.8 Z M17.2 11.2 L21.8 11.2 L21.8 13.4 L17.2 13.4 Z M17.2 15.8 L21.8 15.8 L21.8 18 L17.2 18 Z"/></svg></span>
-        <h1>Twoje centrum dowodzenia</h1>
-        <p>Jedna maszyna, jeden katalog, zero chmury. Wybierz, od czego zaczynasz.</p>
+        <span class="logo" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.4 12 L14.8 5.2 L14.8 18.8 Z M17.2 6.6 L21.8 6.6 L21.8 8.8 L17.2 8.8 Z M17.2 11.2 L21.8 11.2 L21.8 13.4 L17.2 13.4 Z M17.2 15.8 L21.8 15.8 L21.8 18 L17.2 18 Z"/></svg></span>
+        <h1>Spectra<span>Hub</span></h1>
+        <p class="sub">Twoje centrum dowodzenia na własnym VPS.<br>Jedna maszyna, jeden katalog, zero chmury.</p>
+        <p class="state"><i class="dot ok"></i>serwer działa · 127.0.0.1:8787 · v0.2.0</p>
       </div>
 
-      <div class="cards">
-        <a class="card" href="#"><b>Terminal</b><span>Powłoka i sesje agentów</span><em>wkrótce</em></a>
-        <a class="card" href="#"><b>Rozmowy</b><span>Czat z zakładkami</span><em>wkrótce</em></a>
-        <a class="card" href="#"><b>Serwery</b><span>Dysk, RAM, usługi</span><em>wkrótce</em></a>
-        <a class="card" href="#"><b>Pliki</b><span>Drzewo i podgląd</span><em>wkrótce</em></a>
-        <a class="card" href="#"><b>GitHub</b><span>Repozytoria i zmiany</span><em>wkrótce</em></a>
-        <a class="card" href="#"><b>SpectraStudio</b><span>Obrazy i sceny</span><em>osobny produkt</em></a>
-      </div>
+      <nav class="branches" aria-label="Gdzie chcesz wejść">
+        <a class="branch" id="chat" href="#chat">
+          <span class="bico">◈</span>
+          <span class="btx"><b>Rozmowy</b><span>czat z agentami, zakładki</span></span>
+          <span class="tag soon">wkrótce</span>
+        </a>
+        <a class="branch" id="terminal" href="#terminal">
+          <span class="bico">›_</span>
+          <span class="btx"><b>Terminal</b><span>powłoka i sesje</span></span>
+          <span class="tag soon">wkrótce</span>
+        </a>
+        <a class="branch" id="agents" href="#agents">
+          <span class="bico">✳</span>
+          <span class="btx"><b>Agenci</b><span>runtime'y i modele</span></span>
+          <span class="tag soon">wkrótce</span>
+        </a>
+        <a class="branch" id="servers" href="#servers">
+          <span class="bico">▤</span>
+          <span class="btx"><b>Serwery</b><span>dysk, RAM, usługi</span></span>
+          <span class="tag soon">wkrótce</span>
+        </a>
+        <a class="branch" id="github" href="#github">
+          <span class="bico">⑂</span>
+          <span class="btx"><b>GitHub</b><span>repozytoria i zmiany</span></span>
+          <span class="tag soon">wkrótce</span>
+        </a>
+        <a class="branch" id="studio" href="#studio">
+          <span class="bico">▦</span>
+          <span class="btx"><b>SpectraStudio</b><span>obrazy i sceny</span></span>
+          <span class="tag">osobno</span>
+        </a>
+      </nav>
 
-      <p class="foot">SpectraHub 0.1.0 · MIT · <a href="https://github.com/spectrahqteam/spectrahub">github.com/spectrahqteam/spectrahub</a></p>
-    </main>
+      <footer class="foot">
+        <span>SpectraHub 0.2.0 · MIT</span>
+        <a href="https://github.com/spectrahqteam/spectrahub">github.com/spectrahqteam/spectrahub</a>
+      </footer>
+    </section>
   </div>
-</div>
+</main>
 </body>
 </html>
