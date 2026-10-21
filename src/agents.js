@@ -87,12 +87,30 @@ function readEnvFile(file) {
   return env;
 }
 
+// OpenClaw's default agent, from its own config (instant), else from its CLI (slow: it boots the app).
+async function openclawAgent(path) {
+  try {
+    const home = process.env.OPENCLAW_HOME ?? join(homedir(), '.openclaw');
+    const list = JSON.parse(readFileSync(join(home, 'openclaw.json'), 'utf8')).agents?.list ?? [];
+    const pick = list.find((a) => a.default) ?? list[0];
+    if (pick?.id) return pick.id;
+  } catch { /* no readable config: ask the CLI */ }
+  const out = await run(path, ['agents', 'list'], 45000);
+  return /^- (\S+) \(default\)/m.exec(out)?.[1] ?? /^- (\S+)/m.exec(out)?.[1] ?? null;
+}
+
 let cache = null;
+let inflight = null;
 let cachedAt = 0;
 
 // Installed runtimes with version; OpenClaw also reports which gateway agent answers by default.
 export async function scan({ fresh = false } = {}) {
   if (cache && !fresh && Date.now() - cachedAt < 60_000) return cache;
+  inflight ??= doScan().finally(() => { inflight = null; });  // one scan at a time; callers share it
+  return inflight;
+}
+
+async function doScan() {
   let units = null;
   const found = await Promise.all(RUNTIMES.map(async (r) => {
     let path = r.bins.map(which).find(Boolean) ?? null;
@@ -116,9 +134,8 @@ export async function scan({ fresh = false } = {}) {
     out.version = (await version).split('\n')[0].trim() || null;
     if (r.id === 'dsh' && launch?.cwd) out.agent = basename(launch.cwd).toLowerCase();
     if (r.id === 'openclaw') {
-      const list = await run(path, ['agents', 'list'], 15000);
-      out.agent = /^- (\S+) \(default\)/m.exec(list)?.[1] ?? /^- (\S+)/m.exec(list)?.[1] ?? null;
-      if (!out.agent) out.ready = false;
+      out.agent = await openclawAgent(path);
+      if (!out.agent) { out.ready = false; out.note = 'nie podał swoich agentów'; }
     }
     if (!r.adapter) out.note = 'znaleziony, brak adaptera';
     return out;

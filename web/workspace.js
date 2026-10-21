@@ -620,16 +620,59 @@ cInput.addEventListener('keydown', (e) => {
 });
 $('cSend').addEventListener('click', () => { sendLine(); cInput.focus(); });
 
+// ---------- agent scan: a radar while the server looks, then each runtime lights up or fades ----------
+const CANDIDATES = [['claude', 'Claude Code'], ['codex', 'Codex'], ['openclaw', 'OpenClaw'], ['dsh', 'DeepSeek Harness']];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function scanView() {
+  const box = el('div', 'scan');
+  const radar = el('div', 'radar');
+  radar.append(el('i', 'sweep'), el('i', 'ring r1'), el('i', 'ring r2'), el('i', 'blip'));
+  const head = el('div', 'scan-head');
+  head.append(radar, (() => { const t = el('div', 'scan-txt'); t.append(el('b', null, 'skanuję serwer'), el('small', null, 'PATH · usługi systemd · npm')); return t; })());
+  const list = el('div', 'scan-list');
+  for (const [id, label] of CANDIDATES) {
+    const row = el('div', 'scan-row');
+    row.dataset.id = id;
+    row.style.setProperty('--c', color(id));
+    row.append(logo(id), el('span', 'nm', label), el('small', 'scan-st', 'szukam'));
+    list.append(row);
+  }
+  box.append(head, list);
+  return box;
+}
+
+// Plays the result onto the scan view row by row, then resolves.
+async function revealScan(box) {
+  for (const row of box.querySelectorAll('.scan-row')) {
+    const a = agents.find((x) => x.id === row.dataset.id);
+    row.classList.add(a?.ready ? 'found' : a?.installed ? 'partial' : 'missing');
+    row.querySelector('.scan-st').textContent = a?.ready ? `✓ ${a.agent ? '@' + a.agent : 'gotowy'}` : a?.installed ? a.note ?? 'niedostępny' : 'nie znaleziono';
+    await sleep(220);
+  }
+  box.classList.add('done');
+  box.querySelector('.scan-txt b').textContent = `znaleziono ${agents.filter((a) => a.ready).length} z ${CANDIDATES.length}`;
+  await sleep(450);
+}
+
+// Runs a scan with the animation in `host`; the server keeps a fresh result for a minute.
+async function scanInto(host, fresh = false) {
+  const view = scanView();
+  host.replaceChildren(view);
+  const started = Date.now();
+  await loadAgents(fresh);
+  await sleep(Math.max(0, 900 - (Date.now() - started)));  // long enough to be seen, never longer than the scan
+  await revealScan(view);
+}
+
 // ---------- start a session ----------
 const dlg = $('startDlg');
 async function openStart() {
   const pick = $('pick');
-  if (!agents.length) {
-    pick.replaceChildren(el('p', 'p-note', 'szukam agentów na serwerze…'));
-    $('startGo').disabled = true;
-    if (!dlg.open) dlg.showModal();
-    await loadAgents();
-  }
+  $('startGo').disabled = true;
+  if (!dlg.open) dlg.showModal();
+  await scanInto(pick);
+  if (!dlg.open) return;
   pick.replaceChildren();
   const ready = agents.filter((a) => a.ready);
   for (const a of agents.filter((x) => x.installed)) {
@@ -742,7 +785,12 @@ function renderPanel() {
       body.push(r);
     }
     const b = el('button', 'p-btn ghost', 'skanuj ponownie');
-    b.addEventListener('click', async () => { b.textContent = 'skanuję…'; await loadAgents(true); renderPanel(); });
+    b.addEventListener('click', async () => {
+      const host = el('div');
+      pBody.replaceChildren(host);
+      await scanInto(host, true);
+      renderPanel();
+    });
     body.push(sec(b), sec(el('p', 'p-note', 'Skaner szuka Claude Code, Codex, OpenClaw i DeepSeek Harness (Hermes): w PATH, w działających usługach systemd i w katalogach instalacji. Agenci w sesji działają z pełnymi uprawnieniami na tym serwerze.')));
   } else if (panelName === 'settings') {
     const kv = el('div', 'p-kv');
