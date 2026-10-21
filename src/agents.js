@@ -145,6 +145,92 @@ async function doScan() {
   return found;
 }
 
+// ---------- models: what each runtime offers right now, read from the runtime itself ----------
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const OPENCLAW_THINKING = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'adaptive', 'max'];
+let catalog = null;
+let catalogAt = 0;
+let catalogFlight = null;
+
+function jsonFile(file) {
+  try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function tomlValue(file, key) {
+  try { return new RegExp(`^${key}\\s*=\\s*"([^"]*)"`, 'm').exec(readFileSync(file, 'utf8'))?.[1] ?? null; } catch { return null; }
+}
+
+async function claudeModels(rt) {
+  const settings = jsonFile(join(homedir(), '.claude', 'settings.json')) ?? {};
+  return {
+    configurable: true,
+    models: [
+      { id: '', label: 'domyślny agenta' },
+      { id: 'fable', label: 'Fable', note: 'najnowszy Fable' },
+      { id: 'opus', label: 'Opus', note: 'najnowszy Opus' },
+      { id: 'sonnet', label: 'Sonnet', note: 'najnowszy Sonnet' },
+      { id: 'haiku', label: 'Haiku', note: 'najnowszy Haiku' },
+    ].map((m) => ({ ...m, efforts: CLAUDE_EFFORTS })),
+    defaultModel: settings.model ?? null,
+    defaultEffort: settings.effortLevel ?? null,
+    effortLabel: 'effort',
+  };
+}
+
+async function codexModels(rt) {
+  const out = await run(rt.path, ['debug', 'models'], 30000);
+  let list = [];
+  try { const d = JSON.parse(out); list = Array.isArray(d) ? d : d.models ?? []; } catch { /* older codex */ }
+  const conf = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'config.toml');
+  return {
+    configurable: true,
+    models: [{ id: '', label: 'domyślny agenta', efforts: [] }, ...list.filter((m) => m.visibility !== 'hide').map((m) => ({
+      id: m.slug, label: m.display_name ?? m.slug, note: m.description ?? '',
+      efforts: (m.supported_reasoning_levels ?? []).map((l) => l.effort), defaultEffort: m.default_reasoning_level ?? null,
+      contextWindow: m.context_window ? Math.round(m.context_window * (m.effective_context_window_percent ?? 100) / 100) : null,
+    }))],
+    defaultModel: tomlValue(conf, 'model'),
+    defaultEffort: tomlValue(conf, 'model_reasoning_effort'),
+    effortLabel: 'reasoning',
+  };
+}
+
+async function openclawModels(rt) {
+  const out = await run(rt.path, ['models', 'list'], 45000);
+  const rows = out.split('\n').slice(1).map((l) => l.trim().split(/\s{2,}/)).filter((c) => c.length >= 2 && c[0].includes('/'));
+  const models = rows.map((c) => {
+    const tags = c[c.length - 1] ?? '';
+    return { id: c[0], label: c[0], configured: /configured|default/.test(tags), isDefault: /\bdefault\b/.test(tags),
+      contextWindow: /^(\d+)k$/.test(c[2] ?? '') ? Number(c[2].slice(0, -1)) * 1000 : null, efforts: OPENCLAW_THINKING };
+  }).sort((a, b) => Number(b.configured) - Number(a.configured));
+  return {
+    configurable: true,
+    models: [{ id: '', label: 'domyślny agenta', efforts: OPENCLAW_THINKING }, ...models],
+    defaultModel: models.find((m) => m.isDefault)?.id ?? null,
+    defaultEffort: null,
+    effortLabel: 'thinking',
+  };
+}
+
+// Runtimes that only take their model from their own configuration say so.
+const MODEL_SOURCES = { claude: claudeModels, codex: codexModels, openclaw: openclawModels };
+
+export async function models({ fresh = false } = {}) {
+  if (catalog && !fresh && Date.now() - catalogAt < 10 * 60_000) return catalog;
+  catalogFlight ??= (async () => {
+    const out = {};
+    for (const rt of (await scan()).filter((r) => r.ready)) {
+      const src = MODEL_SOURCES[rt.id];
+      try { out[rt.id] = src ? await src(rt) : { configurable: false, models: [], note: 'model ustawia sam agent' }; }
+      catch { out[rt.id] = { configurable: false, models: [], note: 'nie udało się odczytać modeli' }; }
+    }
+    catalog = out;
+    catalogAt = Date.now();
+    return out;
+  })().finally(() => { catalogFlight = null; });
+  return catalogFlight;
+}
+
 const short = (s, n = 160) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
 // Long tool output keeps its head and tail, like a terminal you scroll back in.
@@ -196,9 +282,10 @@ const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) 
 // Claude Code: text deltas, every tool call with its result, thinking, todo list and cost.
 // SpectraHub only opens a window to the agent: its own settings, instructions and hooks apply.
 const claude = {
-  argv(ref, started) {
+  argv(ref, started, o = {}) {
     return ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--permission-mode', 'acceptEdits',
+      ...(o.model ? ['--model', o.model] : []), ...(o.effort ? ['--effort', o.effort] : []),
       ...(started ? ['--resume', ref] : ['--session-id', ref]),
       '--allowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'TodoWrite'];
   },
@@ -218,9 +305,18 @@ const claude = {
       for (const c of Array.isArray(d.message?.content) ? d.message.content : []) {
         if (c.type === 'tool_result') emit({ type: 'step-end', id: c.tool_use_id, ok: !c.is_error, output: clip(textOf(c.content)) });
       }
+    } else if (d.type === 'system' && d.subtype === 'init' && d.model) {
+      emit({ type: 'usage', model: d.model });
+    } else if (d.type === 'rate_limit_event' && d.rate_limit_info?.unifiedWindows) {
+      emit({ type: 'limits', windows: d.rate_limit_info.unifiedWindows, status: d.rate_limit_info.status });
     } else if (d.type === 'result') {
       const u = d.usage ?? {};
-      emit({ type: 'usage', input: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0), output: u.output_tokens ?? 0, cost: d.total_cost_usd ?? null, ms: d.duration_ms ?? null });
+      const last = (u.iterations ?? []).at(-1) ?? u;
+      const mu = Object.values(d.modelUsage ?? {})[0] ?? {};
+      emit({ type: 'usage', input: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0), output: u.output_tokens ?? 0,
+        cost: d.total_cost_usd ?? null, ms: d.duration_ms ?? null,
+        context: (last.input_tokens ?? 0) + (last.cache_read_input_tokens ?? 0) + (last.cache_creation_input_tokens ?? 0) + (last.output_tokens ?? 0),
+        contextWindow: mu.contextWindow ?? null });
       if (d.is_error) emit({ type: 'error', s: String(d.result ?? d.subtype ?? 'error') });
       emit({ type: 'done' });
     }
@@ -236,8 +332,10 @@ function unwrap(command) {
 
 // Codex: messages, commands with their output and exit code, file changes, plan and reasoning.
 const codex = {
-  argv(ref, started) {
-    const common = ['--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check'];
+  argv(ref, started, o = {}) {
+    const images = (o.images ?? []).flatMap((f) => ['-i', f]);  // before the other flags: -i takes several values
+    const common = [...images, '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check',
+      ...(o.model ? ['-m', o.model] : []), ...(o.effort ? ['-c', `model_reasoning_effort="${o.effort}"`] : [])];
     return started ? ['exec', 'resume', ...common, ref, '-'] : ['exec', ...common, '-'];
   },
   stdin: true,
@@ -260,7 +358,8 @@ const codex = {
       else if (d.type === 'item.completed') emit({ type: 'step-end', id: it.id, ok: it.status !== 'failed', output: clip(textOf(it.result?.content ?? it.result ?? '')) });
     } else if (d.type === 'error' || d.type === 'turn.failed') emit({ type: 'error', s: String(d.message ?? d.error?.message ?? 'error') });
     else if (d.type === 'turn.completed') {
-      emit({ type: 'usage', input: d.usage?.input_tokens ?? 0, output: (d.usage?.output_tokens ?? 0) + (d.usage?.reasoning_output_tokens ?? 0) });
+      emit({ type: 'usage', input: d.usage?.input_tokens ?? 0, output: (d.usage?.output_tokens ?? 0) + (d.usage?.reasoning_output_tokens ?? 0),
+        context: (d.usage?.input_tokens ?? 0) + (d.usage?.output_tokens ?? 0) });
       emit({ type: 'done' });
     }
   },
@@ -285,6 +384,7 @@ const dsh = {
     else if (d.type === 'status' && d.phase === 'step_end' && d.usage) {
       this.usage.input += (d.usage.inputTokens ?? 0) + (d.usage.cacheReadTokens ?? 0);
       this.usage.output += d.usage.outputTokens ?? 0;
+      this.usage.context = d.usage.totalTokens ?? null;
       emit({ type: 'usage', ...this.usage });
     } else if (d.type === 'status' && d.phase === 'turn_end') {
       if (d.reason?.kind && d.reason.kind !== 'completed') emit({ type: 'error', s: `tura zakończona: ${d.reason.kind}` });
@@ -296,8 +396,9 @@ const dsh = {
 // OpenClaw: the answer comes as one JSON document at the end, so the steps are read live from the
 // session file the agent writes as it works. Nothing is delivered to channels.
 const openclaw = {
-  argv(ref, _started, { agent, file }) {
-    return ['agent', '--agent', agent, '--session-id', ref, '--message-file', file, '--json', '--timeout', '600'];
+  argv(ref, _started, { agent, file, model, effort }) {
+    return ['agent', '--agent', agent, '--session-id', ref, '--message-file', file, '--json', '--timeout', '600',
+      ...(model ? ['--model', model] : []), ...(effort ? ['--thinking', effort] : [])];
   },
   stdin: false,
   tailFile(ref, rt) {
@@ -320,8 +421,12 @@ const openclaw = {
     let d;
     try { d = JSON.parse(text); } catch { return emit({ type: 'error', s: short(text.trim() || 'brak odpowiedzi', 400) }); }
     for (const p of d.result?.payloads ?? []) if (p.text) emit({ type: 'text', s: p.text.trimEnd(), block: true });
-    const u = d.result?.meta?.agentMeta?.usage;
-    if (u) emit({ type: 'usage', input: (u.input ?? 0) + (u.cacheRead ?? 0), output: u.output ?? 0, ms: d.result?.meta?.durationMs ?? null });
+    const m = d.result?.meta?.agentMeta ?? {};
+    const u = m.usage;
+    if (u) {
+      emit({ type: 'usage', input: (u.input ?? 0) + (u.cacheRead ?? 0), output: u.output ?? 0, ms: d.result?.meta?.durationMs ?? null,
+        model: m.model ? `${m.provider ? m.provider + '/' : ''}${m.model}` : null, context: m.promptTokens ?? null, contextWindow: m.contextTokens ?? null });
+    }
     if (d.status !== 'ok') emit({ type: 'error', s: String(d.summary ?? d.status) });
     emit({ type: 'done' });
   },
@@ -334,8 +439,8 @@ export function newRef(id) {
   return id === 'codex' || id === 'dsh' ? null : id === 'openclaw' ? `spectrahub-${randomUUID()}` : randomUUID();
 }
 
-// Runs one turn. `emit` receives {type: text|step|step-end|usage|error|ref|done}; the returned function stops it.
-export function turn(rt, { ref, started, prompt, cwd }, emit) {
+// Runs one turn. `emit` receives {type: text|step|step-end|usage|limits|error|ref|done}; the returned function stops it.
+export function turn(rt, { ref, started, prompt, cwd, model, effort, images }, emit) {
   const a = Object.create(ADAPTERS[rt.id]);  // per-run state (e.g. dsh: did text already stream)
   let file = null;
   if (rt.id === 'openclaw') {
@@ -346,7 +451,8 @@ export function turn(rt, { ref, started, prompt, cwd }, emit) {
   }
   const l = rt.launch;
   const env = { ...process.env, ...(l?.envFile ? readEnvFile(l.envFile) : {}), ...(l?.env ?? {}), NO_COLOR: '1' };
-  const [bin, args] = l ? [l.node, [l.script, ...a.argv(ref, started, { agent: rt.agent, file })]] : [rt.path, a.argv(ref, started, { agent: rt.agent, file })];
+  const opts = { agent: rt.agent, file, model, effort, images };
+  const [bin, args] = l ? [l.node, [l.script, ...a.argv(ref, started, opts)]] : [rt.path, a.argv(ref, started, opts)];
   const child = spawn(bin, args, {
     cwd: l?.cwd ?? cwd, env, stdio: [a.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });

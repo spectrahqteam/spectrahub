@@ -182,7 +182,7 @@ test('adapters turn each runtime events into the same steps', async () => {
   assert.equal(cx.splice(2, 1)[0].title, 'uptime', 'unquoted shell wrapper is removed too');
   assert.deepEqual(cx[0], { type: 'step', id: 'i1', kind: 'tool', name: 'bash', title: 'echo hi && ls' });
   assert.deepEqual(cx[1], { type: 'step-end', id: 'i1', ok: false, exit: 2, output: 'hi\n' });
-  assert.deepEqual(cx[2], { type: 'usage', input: 5, output: 2 });
+  assert.deepEqual(cx[2], { type: 'usage', input: 5, output: 2, context: 6 });
   // DeepSeek Harness: thinking, tool call and result joined by callId, tokens per step
   const ds = run('dsh', [
     { type: 'thinking', text: 'plan' },
@@ -193,7 +193,7 @@ test('adapters turn each runtime events into the same steps', async () => {
   assert.equal(ds[0].kind, 'think');
   assert.deepEqual(ds[1], { type: 'step', id: 'c1', kind: 'tool', name: 'bash', title: 'uptime' });
   assert.deepEqual(ds[2], { type: 'step-end', id: 'c1', ok: true, output: 'up 9 days' });
-  assert.deepEqual(ds[3], { type: 'usage', input: 7, output: 2 });
+  assert.deepEqual(ds[3], { type: 'usage', input: 7, output: 2, context: null });
   // OpenClaw: steps read from its session file
   const oc = run('openclaw', [
     { type: 'message', id: 'x', message: { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: { path: '/etc/hostname' } }] } },
@@ -203,4 +203,49 @@ test('adapters turn each runtime events into the same steps', async () => {
     { type: 'step', id: 't1', kind: 'tool', name: 'read', title: '/etc/hostname' },
     { type: 'step-end', id: 't1', ok: true, output: 'v5' },
   ]);
+});
+
+test('projects hold sessions; sessions can be renamed, pinned, moved and deleted', async () => {
+  const pr = await (await api('/api/projects', { method: 'POST', body: JSON.stringify({ name: 'Serwery' }) })).json();
+  assert.equal(pr.project.name, 'Serwery');
+  const { session } = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ agents: ['claude'], title: 'do przeniesienia' }) })).json();
+  const patched = await (await api(`/api/sessions/${session.id}`, { method: 'PATCH', body: JSON.stringify({ title: 'nowa nazwa', pinned: true, projectId: pr.project.id }) })).json();
+  assert.deepEqual([patched.session.title, patched.session.pinned, patched.session.projectId], ['nowa nazwa', true, pr.project.id]);
+  assert.equal((await api(`/api/sessions/${session.id}`, { method: 'PATCH', body: JSON.stringify({ projectId: 'nope' }) })).status, 400);
+  await api(`/api/projects/${pr.project.id}`, { method: 'PATCH', body: JSON.stringify({ name: 'VPS' }) });
+  assert.equal((await (await api('/api/projects')).json()).projects.find((p) => p.id === pr.project.id).name, 'VPS');
+  await api(`/api/projects/${pr.project.id}`, { method: 'DELETE' });
+  const listed = (await (await api('/api/sessions')).json()).sessions.find((x) => x.id === session.id);
+  assert.equal(listed.projectId, null, 'removing a project keeps its sessions');
+  assert.equal((await api(`/api/sessions/${session.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await api(`/api/sessions/${session.id}`)).status, 404);
+  const { existsSync } = await import('node:fs');
+  assert.ok(existsSync(join(dir, 'data', 'sessions', 'trash', `${session.id}.json`)), 'deleted sessions go to the trash');
+});
+
+test('uploads reach the agent as files on the server; only known files can be read back', async () => {
+  const { session } = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ agents: ['claude'] }) })).json();
+  const up = await fetch(`${base}/api/sessions/${session.id}/files`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain', 'X-File-Name': encodeURIComponent('notatka ą.txt') }, body: 'treść pliku',
+  });
+  assert.equal(up.status, 201);
+  const { file } = await up.json();
+  assert.equal(file.name, 'notatka _.txt');
+  const read = await api(`/api/sessions/${session.id}/files/${file.id}`);
+  assert.equal(read.status, 200);
+  assert.equal(await read.text(), 'treść pliku');
+  assert.match(read.headers.get('content-security-policy'), /sandbox/);
+  assert.equal((await api(`/api/sessions/${session.id}/files/zzzz`)).status, 404);
+
+  await api(`/api/sessions/${session.id}`, { method: 'PATCH', body: JSON.stringify({ models: { claude: { model: 'opus', effort: 'high' } } }) });
+  await api(`/api/sessions/${session.id}/send`, { method: 'POST', body: JSON.stringify({ to: ['claude'], text: 'przeczytaj', attachments: [file.id] }) });
+  await waitIdle(session.id);
+  const prompt = readFileSync(join(dir, 'last-prompt.txt'), 'utf8');
+  assert.ok(prompt.includes(file.path), 'the prompt names the uploaded file');
+  const args = readFileSync(argsLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).at(-1);
+  assert.deepEqual(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2), ['--model', 'opus']);
+  assert.deepEqual(args.slice(args.indexOf('--effort'), args.indexOf('--effort') + 2), ['--effort', 'high']);
+  const s = (await (await api(`/api/sessions/${session.id}`)).json()).session;
+  assert.equal(s.agents.claude.usage.turns, 1);
+  assert.equal(s.agents.claude.usage.cost, 0.01);
 });

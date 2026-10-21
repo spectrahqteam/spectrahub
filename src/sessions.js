@@ -2,8 +2,8 @@
 // session; before its turn it gets what the others said since it last spoke, so they work together.
 // Runs live on the server, not in the browser tab: closing the phone does not stop an agent.
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs';
+import { basename, extname, isAbsolute, join, normalize } from 'node:path';
 import { scan, turn, newRef } from './agents.js';
 
 const CONTEXT_CHARS = 8000;
@@ -47,8 +47,158 @@ export function subscribe(id, fn) {
 export function listSessions(config) {
   return readdirSync(dirOf(config)).filter((f) => f.endsWith('.json')).map((f) => {
     const s = load(config, f.slice(0, -5));
-    return s && { id: s.id, title: s.title, createdAt: s.createdAt, updatedAt: s.updatedAt, agents: Object.keys(s.agents) };
+    return s && {
+      id: s.id, title: s.title, createdAt: s.createdAt, updatedAt: s.updatedAt, agents: Object.keys(s.agents),
+      projectId: s.projectId ?? null, pinned: Boolean(s.pinned), busy: Object.values(s.agents).some((a) => a.state === 'busy'),
+    };
   }).filter(Boolean).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+// ---------- projects: folders for sessions ----------
+function projectsFile(config) {
+  mkdirSync(join(config.dir, 'data'), { recursive: true });
+  return join(config.dir, 'data', 'projects.json');
+}
+export function listProjects(config) {
+  try { return JSON.parse(readFileSync(projectsFile(config), 'utf8')); } catch { return []; }
+}
+function saveProjects(config, list) {
+  writeFileSync(projectsFile(config) + '.tmp', JSON.stringify(list));
+  renameSync(projectsFile(config) + '.tmp', projectsFile(config));
+}
+export function createProject(config, name) {
+  const n = String(name ?? '').trim().slice(0, 60);
+  if (!n) return { error: 'name required' };
+  const p = { id: randomUUID().slice(0, 8), name: n, createdAt: new Date().toISOString() };
+  saveProjects(config, [...listProjects(config), p]);
+  return { project: p };
+}
+export function updateProject(config, id, { name }) {
+  const list = listProjects(config);
+  const p = list.find((x) => x.id === id);
+  if (!p) return { error: 'no such project', code: 404 };
+  if (String(name ?? '').trim()) p.name = String(name).trim().slice(0, 60);
+  saveProjects(config, list);
+  return { project: p };
+}
+// Removing a project keeps its sessions; they go back to the list without a folder.
+export function deleteProject(config, id) {
+  const list = listProjects(config);
+  if (!list.some((x) => x.id === id)) return { error: 'no such project', code: 404 };
+  saveProjects(config, list.filter((x) => x.id !== id));
+  for (const sum of listSessions(config)) {
+    if (sum.projectId !== id) continue;
+    const s = load(config, sum.id);
+    s.projectId = null;
+    save(config, s);
+  }
+  return { ok: true };
+}
+
+// ---------- one session: rename, pin, move, models, delete ----------
+export function updateSession(config, id, patch) {
+  const s = load(config, id);
+  if (!s) return { error: 'no such session', code: 404 };
+  if (typeof patch.title === 'string' && patch.title.trim()) { s.title = patch.title.trim().slice(0, 80); s.autoTitle = false; }
+  if (typeof patch.pinned === 'boolean') s.pinned = patch.pinned;
+  if ('projectId' in patch) {
+    if (patch.projectId && !listProjects(config).some((p) => p.id === patch.projectId)) return { error: 'no such project', code: 400 };
+    s.projectId = patch.projectId || null;
+  }
+  for (const [agent, m] of Object.entries(patch.models ?? {})) {
+    if (!s.agents[agent]) continue;
+    s.agents[agent].model = typeof m.model === 'string' ? m.model.slice(0, 120) : s.agents[agent].model;
+    s.agents[agent].effort = typeof m.effort === 'string' ? m.effort.slice(0, 20) : s.agents[agent].effort;
+  }
+  save(config, s);
+  publish(s.id, { type: 'meta', session: summary(s) });
+  return { session: summary(s) };
+}
+
+function summary(s) {
+  return { id: s.id, title: s.title, pinned: Boolean(s.pinned), projectId: s.projectId ?? null,
+    agents: Object.fromEntries(Object.entries(s.agents).map(([k, a]) => [k, { model: a.model ?? '', effort: a.effort ?? '', state: a.state }])) };
+}
+
+// Deleting moves the session to data/sessions/trash, so it can be brought back by hand.
+export function deleteSession(config, id) {
+  const s = load(config, id);
+  if (!s) return { error: 'no such session', code: 404 };
+  stop(config, id);
+  const trash = join(dirOf(config), 'trash');
+  mkdirSync(trash, { recursive: true });
+  renameSync(join(dirOf(config), `${id}.json`), join(trash, `${id}.json`));
+  if (existsSync(filesDir(config, id, false))) renameSync(filesDir(config, id, false), join(trash, `${id}-files`));
+  sessions.delete(id);
+  publish(id, { type: 'deleted' });
+  return { ok: true };
+}
+
+// ---------- files: what the user uploads and what the agents write ----------
+const SECRET = /(^|\/)(\.env[^/]*|id_[a-z0-9]+|[^/]*\.(pem|key|p12|pfx)|auth\.json|credentials[^/]*|token)$/i;
+const MAX_UPLOAD = 25 * 1024 * 1024;
+
+function filesDir(config, id, make = true) {
+  const d = join(dirOf(config), id + '-files');
+  if (make) mkdirSync(d, { recursive: true });
+  return d;
+}
+
+function guessType(name) {
+  const e = extname(name).toLowerCase();
+  return ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+    '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
+    '.html': 'text/html', '.htm': 'text/html', '.json': 'application/json', '.md': 'text/markdown', '.csv': 'text/csv' })[e] ?? (/\.(txt|log|js|mjs|ts|tsx|jsx|css|py|sh|yml|yaml|toml|ini|conf|xml|sql|rs|go|java|c|h|cpp|rb|php)$/i.test(name) ? 'text/plain' : 'application/octet-stream');
+}
+
+// Adds a file to the session's list (deduplicated by path); it can then be opened from the chat.
+function track(s, path, from) {
+  if (!path || !isAbsolute(path)) return null;
+  const p = normalize(path);
+  let f = s.files?.find((x) => x.path === p);
+  if (!f) {
+    f = { id: randomUUID().slice(0, 8), path: p, name: basename(p), type: guessType(p), from, at: new Date().toISOString() };
+    (s.files ??= []).push(f);
+  }
+  try { f.size = statSync(p).size; } catch { /* written later or gone */ }
+  return f;
+}
+
+export function saveUpload(config, id, { name, type, data }) {
+  const s = load(config, id);
+  if (!s) return { error: 'no such session', code: 404 };
+  if (data.length > MAX_UPLOAD) return { error: 'too large', code: 413 };
+  const safe = basename(String(name || 'plik')).replace(/[^\w.\- ]+/g, '_').slice(-80) || 'plik';
+  const path = join(filesDir(config, id), `${Date.now().toString(36)}-${safe}`);
+  writeFileSync(path, data);
+  const f = track(s, path, 'you');
+  if (type && type !== 'application/octet-stream') f.type = type;
+  f.name = safe;
+  save(config, s);
+  publish(s.id, { type: 'files', files: s.files });
+  return { file: f };
+}
+
+// A file may be read only if this session knows it: uploaded here or written by its agents.
+export function sessionFile(config, id, fileId) {
+  const s = load(config, id);
+  if (!s) return { error: 'no such session', code: 404 };
+  const f = s.files?.find((x) => x.id === fileId);
+  if (!f) return { error: 'no such file', code: 404 };
+  if (SECRET.test(f.path)) return { error: 'refused: looks like a secret', code: 403 };
+  let st;
+  try { st = statSync(f.path); } catch { return { error: 'file is gone', code: 410 }; }
+  if (!st.isFile()) return { error: 'not a file', code: 400 };
+  return { file: { ...f, size: st.size }, path: f.path };
+}
+
+// Every running turn on this server, for the "background tasks" view.
+export function runs(config) {
+  return [...running.keys()].map((key) => {
+    const [id, agent] = key.split(':');
+    const s = sessions.get(id);
+    return s && { session: id, title: s.title, agent };
+  }).filter(Boolean);
 }
 
 export function getSession(config, id) {
@@ -101,7 +251,7 @@ function setState(s, agent, state) {
 }
 
 // Sends the user's line to the chosen agents; each answers in its own entry, streamed as it comes.
-export async function send(config, id, { to, text }) {
+export async function send(config, id, { to, text, attachments = [] }) {
   const s = load(config, id);
   if (!s) return { error: 'no such session', code: 404 };
   const targets = (to.includes('all') ? Object.keys(s.agents) : to).filter((a) => s.agents[a]);
@@ -109,7 +259,8 @@ export async function send(config, id, { to, text }) {
   const busy = targets.filter((a) => s.agents[a].state === 'busy');
   if (busy.length) return { error: `busy: ${busy.join(', ')}`, code: 409 };
   const runtimes = await scan();
-  const mine = add(config, s, { who: 'you', to: targets, s: text });
+  const files = attachments.map((fid) => s.files?.find((f) => f.id === fid)).filter(Boolean);
+  const mine = add(config, s, { who: 'you', to: targets, s: text, ...(files.length ? { files: files.map((f) => f.id) } : {}) });
   if (s.autoTitle) {  // an unnamed session takes its name from the first line
     const t = text.replace(/\s+/g, ' ').trim();
     s.title = t.length > 48 ? t.slice(0, 47).trimEnd() + '…' : t;
@@ -123,9 +274,12 @@ export async function send(config, id, { to, text }) {
     const st = s.agents[agent];
     const others = catchUp(s, agent, mine.n);
     st.synced = new Date().toISOString();
-    const prompt = others
+    const attached = files.length
+      ? `\n\nZałączniki od użytkownika (pliki na tym serwerze):\n${files.map((f) => `- ${f.path} (${f.type}${f.size != null ? `, ${f.size} B` : ''})`).join('\n')}`
+      : '';
+    const prompt = (others
       ? `Rozmowa zespołowa w SpectraHub. Od Twojej ostatniej odpowiedzi:\n${others}\n\n---\nWiadomość do Ciebie:\n${text}`
-      : text;
+      : text) + attached;
     // The reply is a timeline: text and steps (tools, edits, thinking, plan) in the order they happened.
     const reply = add(config, s, { who: agent, s: '', items: [], status: 'running' });
     const began = Date.now();
@@ -136,7 +290,8 @@ export async function send(config, id, { to, text }) {
       continue;
     }
     setState(s, agent, 'busy');
-    const stop = turn(rt, { ref: st.ref, started: st.started, prompt, cwd: s.cwd }, (e) => {
+    const images = files.filter((f) => f.type.startsWith('image/')).map((f) => f.path);
+    const stop = turn(rt, { ref: st.ref, started: st.started, prompt, cwd: s.cwd, model: st.model || null, effort: st.effort || null, images }, (e) => {
       if (e.type === 'text') {
         const last = reply.items.at(-1);
         const s1 = last?.k === 'text' && e.block && last.s && !last.s.endsWith('\n') ? '\n' + e.s : e.s;
@@ -154,7 +309,13 @@ export async function send(config, id, { to, text }) {
         if (e.type === 'step') {
           for (const key of ['kind', 'name', 'title', 'text', 'diff', 'todos']) if (e[key] != null && e[key] !== '') step[key] = e[key];
           if (e.done) step.status = 'ok';
+          if (step.kind === 'edit') {  // files the agent writes can be opened from the chat
+            const paths = step.diff?.path ? [step.diff.path] : String(step.title ?? '').split(/[\s,]+/).filter((x) => x.startsWith('/'));
+            const tracked = paths.map((p) => track(s, p, agent)).filter(Boolean);
+            if (tracked.length) { step.files = tracked.map((f) => f.id); publish(s.id, { type: 'files', files: s.files }); }
+          }
         } else {
+          for (const fid of step.files ?? []) track(s, s.files.find((f) => f.id === fid)?.path, agent);  // size after writing
           step.status = e.ok === false ? 'error' : 'ok';
           if (e.output != null) step.output = e.output;
           if (e.exit != null) step.exit = e.exit;
@@ -165,6 +326,9 @@ export async function send(config, id, { to, text }) {
         const { type: _t, ...u } = e;
         reply.usage = { ...reply.usage, ...Object.fromEntries(Object.entries(u).filter(([, v]) => v != null)) };
         publish(s.id, { type: 'usage', n: reply.n, usage: reply.usage });
+      } else if (e.type === 'limits') {
+        st.limits = { windows: e.windows, status: e.status, at: new Date().toISOString() };
+        publish(s.id, { type: 'limits', agent, limits: st.limits });
       } else if (e.type === 'ref') {
         st.ref = e.ref;
       } else if (e.type === 'error') {
@@ -174,6 +338,13 @@ export async function send(config, id, { to, text }) {
         if (st.ref) st.started = true;
         reply.s = reply.s.trimEnd();
         reply.status = reply.error ? 'error' : 'done';
+        const u = reply.usage ?? {};
+        const tot = (st.usage ??= { input: 0, output: 0, cost: 0, turns: 0 });  // running totals for the usage view
+        tot.input += u.input ?? 0;
+        tot.output += u.output ?? 0;
+        tot.cost += u.cost ?? 0;
+        tot.turns += 1;
+        for (const k of ['model', 'context', 'contextWindow']) if (u[k] != null) tot[k] = u[k];
         reply.ms = Date.now() - began;
         for (const i of reply.items) if (i.k === 'step' && i.status === 'running') i.status = reply.error ? 'error' : 'ok';
         publish(s.id, { type: 'usage', n: reply.n, usage: reply.usage ?? {}, ms: reply.ms });

@@ -1,13 +1,17 @@
 // Minimal HTTP server: static shell + health endpoints. No dependencies.
 import { createServer as httpCreateServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VERSION, paths, defaultDir } from './config.js';
 import { authorize, createPairing, redeemPairing, runLine, terminalInfo } from './terminal.js';
-import { scan } from './agents.js';
-import { createSession, getSession, listSessions, send as sendTo, stop as stopRun, subscribe } from './sessions.js';
+import { models, scan } from './agents.js';
+import {
+  createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, runs, saveUpload,
+  send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession,
+} from './sessions.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const WEB = join(ROOT, 'web');
@@ -101,6 +105,20 @@ a{color:#d97757;text-decoration:none}
 </div></body></html>`;
 }
 
+function readRaw(req, limit) {
+  return new Promise((ok, fail) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { fail(Object.assign(new Error('too large'), { code: 413 })); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => ok(Buffer.concat(chunks)));
+    req.on('error', fail);
+  });
+}
+
 function readBody(req, limit = 4096) {
   return new Promise((ok, fail) => {
     let size = 0;
@@ -132,6 +150,11 @@ async function terminalRoute(req, res, url, config) {
   if (url.pathname === '/api/agents' && req.method === 'GET') {
     return json(200, { agents: await scan({ fresh: url.searchParams.has('fresh') }) });
   }
+  if (url.pathname === '/api/models' && req.method === 'GET') {
+    return json(200, { models: await models({ fresh: url.searchParams.has('fresh') }) });
+  }
+  if (url.pathname === '/api/runs' && req.method === 'GET') return json(200, { runs: runs({ ...config, dir }) });
+  if (url.pathname.startsWith('/api/projects')) return projectRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname.startsWith('/api/sessions')) return sessionRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname === '/api/terminal/pair/new' && req.method === 'POST') {
     return json(200, { code: createPairing(dir), ttlMinutes: 15 });
@@ -146,6 +169,17 @@ async function terminalRoute(req, res, url, config) {
     return runLine(config, line, res);
   }
   return send(res, 404, 'not found');
+}
+
+// Folders for sessions.
+async function projectRoute(req, res, url, config, json) {
+  const id = url.pathname.split('/').filter(Boolean)[2];
+  const body = async () => { try { return JSON.parse(await readBody(req)); } catch { return {}; } };
+  if (!id && req.method === 'GET') return json(200, { projects: listProjects(config) });
+  if (!id && req.method === 'POST') { const r = createProject(config, (await body()).name); return r.error ? json(400, r) : json(201, r); }
+  if (id && req.method === 'PATCH') { const r = updateProject(config, id, await body()); return r.error ? json(r.code ?? 400, r) : json(200, r); }
+  if (id && req.method === 'DELETE') { const r = deleteProject(config, id); return r.error ? json(r.code ?? 400, r) : json(200, r); }
+  return send(res, 405, 'method not allowed');
 }
 
 // Work sessions with agents. Events stream as SSE over a GET that carries the token header.
@@ -166,10 +200,34 @@ async function sessionRoute(req, res, url, config, json) {
   const s = getSession(config, id);
   if (!s) return json(404, { error: 'no such session' });
   if (!action && req.method === 'GET') return json(200, { session: s });
+  if (!action && req.method === 'PATCH') { const r = updateSession(config, id, (await body()) ?? {}); return r.error ? json(r.code ?? 400, r) : json(200, r); }
+  if (!action && req.method === 'DELETE') { const r = deleteSession(config, id); return r.error ? json(r.code ?? 400, r) : json(200, r); }
+  if (action === 'files' && req.method === 'POST' && !parts[4]) {
+    let data;
+    try { data = await readRaw(req, 25 * 1024 * 1024); } catch (e) { return json(e.code ?? 400, { error: e.message }); }
+    let name = 'plik';
+    try { name = decodeURIComponent(req.headers['x-file-name'] ?? 'plik'); } catch { /* keep default */ }
+    const r = saveUpload(config, id, { name, type: req.headers['content-type'], data });
+    return r.error ? json(r.code ?? 400, r) : json(201, r);
+  }
+  if (action === 'files' && req.method === 'GET' && parts[4]) {
+    const r = sessionFile(config, id, parts[4]);
+    if (r.error) return json(r.code ?? 400, r);
+    const name = encodeURIComponent(r.file.name);
+    res.writeHead(200, {
+      'Content-Type': r.file.type.startsWith('text/') || r.file.type === 'application/json' ? `${r.file.type}; charset=utf-8` : r.file.type,
+      'Content-Length': r.file.size,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': `${url.searchParams.has('download') ? 'attachment' : 'inline'}; filename*=UTF-8''${name}`,
+      'Content-Security-Policy': "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'",
+    });
+    return createReadStream(r.path).pipe(res);
+  }
   if (action === 'send' && req.method === 'POST') {
     const b = await body();
     if (!b || typeof b.text !== 'string' || !b.text.trim() || !Array.isArray(b.to)) return send(res, 400, 'bad request');
-    const r = await sendTo(config, id, { to: b.to, text: b.text.slice(0, 20000) });
+    const r = await sendTo(config, id, { to: b.to, text: b.text.slice(0, 20000), attachments: Array.isArray(b.attachments) ? b.attachments.slice(0, 20) : [] });
     return r.error ? json(r.code ?? 400, r) : json(202, r);
   }
   if (action === 'stop' && req.method === 'POST') {
@@ -210,7 +268,7 @@ export function createServer(config) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
     }
-    if (/^\/api\/(terminal\/|agents$|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
+    if (/^\/api\/(terminal\/|agents$|models$|runs$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
     return serveStatic(res, url.pathname);
   });
