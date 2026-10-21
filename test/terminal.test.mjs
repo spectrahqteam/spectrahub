@@ -88,3 +88,22 @@ test('the terminal page is served without its extension', async () => {
   assert.equal(res.status, 200);
   assert.match(await res.text(), /terminal\.js/);
 });
+
+test('init creates the token and prints a login link with it in the fragment', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const home = mkdtempSync(join(tmpdir(), 'spectrahub-init-'));
+  try {
+    const out = execFileSync(process.execPath, ['bin/spectrahub.js', 'init', '--url', 'https://hub.example.com/'], {
+      env: { ...process.env, SPECTRAHUB_HOME: home }, encoding: 'utf8',
+    });
+    const saved = ensureToken(home);
+    assert.equal(statSync(tokenPath(home)).mode & 0o777, 0o600);
+    assert.ok(out.includes(`https://hub.example.com/terminal#token=${saved}`), out);
+    const link = execFileSync(process.execPath, ['bin/spectrahub.js', 'login'], {
+      env: { ...process.env, SPECTRAHUB_HOME: home }, encoding: 'utf8',
+    });
+    assert.equal(link.trim(), `https://hub.example.com/terminal#token=${saved}`);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

@@ -15,7 +15,13 @@ const store = {
   clear() { try { localStorage.removeItem(KEY); } catch { /* nothing stored */ } },
 };
 
-let token = store.get();
+// A login link (…/terminal#token=…) signs this browser in; the token leaves the address bar at once.
+const fromLink = new URLSearchParams(location.hash.slice(1)).get('token');
+if (fromLink) {
+  store.set(fromLink);
+  history.replaceState(null, '', location.pathname + location.search);
+}
+let token = fromLink || store.get();
 let info = null;          // { user, host, cwdShort, commands }
 let mode = 'login';       // 'login' | 'shell' | 'busy'
 let running = null;       // AbortController of the running command
@@ -199,7 +205,7 @@ const builtins = {
   help() {
     line('dostępne komendy (tylko odczyt):', 'note');
     line('  ' + info.commands.join('  ·  '));
-    line('  clear · history · logout', 'note');
+    line('  clear · history · settings · logout', 'note');
     line('Ctrl+C przerywa · Ctrl+L czyści · ↑↓ historia · Tab podpowiada', 'note');
   },
   clear() { out.replaceChildren(); },
@@ -214,7 +220,41 @@ async function submit() {
   if (mode === 'login') {
     token = text.trim();
     if (token) store.set(token);
-    return connect();
+    return // ---------- settings ----------
+const panel = document.getElementById('settings');
+const tokenField = document.getElementById('s-token');
+const linkFor = () => `${location.origin}/terminal#token=${token}`;
+function flash(btn, text) {
+  const old = btn.textContent;
+  btn.textContent = text;
+  setTimeout(() => { btn.textContent = old; }, 1400);
+}
+async function copy(text, btn) {
+  try { await navigator.clipboard.writeText(text); flash(btn, 'skopiowano'); } catch { flash(btn, 'nie udało się'); }
+}
+function openSettings(show) {
+  panel.hidden = !show;
+  if (!show) return input.focus({ preventScroll: true });
+  const has = Boolean(token && info);
+  panel.classList.toggle('empty', !has);
+  tokenField.textContent = has ? '•'.repeat(24) : '—';
+  tokenField.dataset.shown = '';
+}
+document.getElementById('gear').addEventListener('click', () => openSettings(panel.hidden));
+document.getElementById('s-close').addEventListener('click', () => openSettings(false));
+document.getElementById('s-show').addEventListener('click', (e) => {
+  const shown = tokenField.dataset.shown === '1';
+  tokenField.textContent = shown ? '•'.repeat(24) : token;
+  tokenField.dataset.shown = shown ? '' : '1';
+  e.currentTarget.textContent = shown ? 'pokaż' : 'ukryj';
+});
+document.getElementById('s-copy').addEventListener('click', (e) => copy(token, e.currentTarget));
+document.getElementById('s-link').addEventListener('click', (e) => copy(linkFor(), e.currentTarget));
+document.getElementById('s-logout').addEventListener('click', () => { openSettings(false); builtins.logout(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) openSettings(false); });
+builtins.settings = () => openSettings(true);
+
+connect();
   }
   const t = text.trim();
   if (!t) { screen.scrollTop = screen.scrollHeight; return render(); }
@@ -273,5 +313,39 @@ for (const ev of ['input', 'select', 'keyup', 'click']) input.addEventListener(e
 input.addEventListener('focus', () => cmd.classList.add('focus'));
 input.addEventListener('blur', () => cmd.classList.remove('focus'));
 screen.addEventListener('click', () => { if (!getSelection().toString() && mode !== 'busy') input.focus({ preventScroll: true }); });
+
+// ---------- settings ----------
+const panel = document.getElementById('settings');
+const tokenField = document.getElementById('s-token');
+const linkFor = () => `${location.origin}/terminal#token=${token}`;
+function flash(btn, text) {
+  const old = btn.textContent;
+  btn.textContent = text;
+  setTimeout(() => { btn.textContent = old; }, 1400);
+}
+async function copy(text, btn) {
+  try { await navigator.clipboard.writeText(text); flash(btn, 'skopiowano'); } catch { flash(btn, 'nie udało się'); }
+}
+function openSettings(show) {
+  panel.hidden = !show;
+  if (!show) return input.focus({ preventScroll: true });
+  const has = Boolean(token && info);
+  panel.classList.toggle('empty', !has);
+  tokenField.textContent = has ? '•'.repeat(24) : '—';
+  tokenField.dataset.shown = '';
+}
+document.getElementById('gear').addEventListener('click', () => openSettings(panel.hidden));
+document.getElementById('s-close').addEventListener('click', () => openSettings(false));
+document.getElementById('s-show').addEventListener('click', (e) => {
+  const shown = tokenField.dataset.shown === '1';
+  tokenField.textContent = shown ? '•'.repeat(24) : token;
+  tokenField.dataset.shown = shown ? '' : '1';
+  e.currentTarget.textContent = shown ? 'pokaż' : 'ukryj';
+});
+document.getElementById('s-copy').addEventListener('click', (e) => copy(token, e.currentTarget));
+document.getElementById('s-link').addEventListener('click', (e) => copy(linkFor(), e.currentTarget));
+document.getElementById('s-logout').addEventListener('click', () => { openSettings(false); builtins.logout(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) openSettings(false); });
+builtins.settings = () => openSettings(true);
 
 connect();

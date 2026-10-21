@@ -22,6 +22,25 @@
       <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
       <span class="win-title" id="title">terminal</span>
       <span class="win-meta" id="mode" title="Bez pseudoterminala: komendy działają przez potoki, bez interaktywnych programów">bez TTY</span>
+      <button class="gear" id="gear" type="button" aria-label="Ustawienia" title="Ustawienia"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></button>
+    </div>
+    <div class="settings" id="settings" hidden>
+      <div class="s-head"><b>ustawienia</b><button type="button" id="s-close" aria-label="Zamknij">×</button></div>
+      <div class="s-row">
+        <span class="s-label">token tego urządzenia</span>
+        <code id="s-token">—</code>
+        <span class="s-btns"><button type="button" id="s-show">pokaż</button><button type="button" id="s-copy">kopiuj</button></span>
+      </div>
+      <div class="s-row">
+        <span class="s-label">zaloguj inne urządzenie</span>
+        <span class="s-note">link z tokenem: otwórz go raz na drugim urządzeniu. Traktuj jak hasło.</span>
+        <span class="s-btns"><button type="button" id="s-link">kopiuj link</button></span>
+      </div>
+      <div class="s-row">
+        <span class="s-label">nowy token</span>
+        <span class="s-note">na serwerze: <code>spectrahub token --rotate</code> — wszystkie urządzenia zalogują się ponownie</span>
+      </div>
+      <div class="s-row"><span class="s-btns"><button type="button" id="s-logout" class="warn">wyloguj to urządzenie</button></span></div>
     </div>
     <div class="tabs" role="tablist">
       <button class="tab on" role="tab" aria-selected="true"><span class="state" id="state"></span>shell</button>

@@ -30,6 +30,12 @@ export function allowedCommands() {
   return [...Object.keys(ALLOWED), 'pwd'];
 }
 
+// One link logs a browser in: the token rides in the #fragment, which never reaches the server or its logs.
+export function loginLink(config, token) {
+  const base = (config.publicUrl || `http://${config.server.host}:${config.server.port}`).replace(/\/+$/, '');
+  return `${base}/terminal#token=${token}`;
+}
+
 export function tokenPath(dir) {
   return join(dir, 'token');
 }

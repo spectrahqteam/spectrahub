@@ -66,15 +66,21 @@ Then issue a certificate with certbot or acme.sh, exactly as for any other site.
 
 ## Terminal
 
-The terminal page (`/terminal`) is off until the owner creates a token:
+`spectrahub init` creates the owner token and prints a one-time login link. Open it once and the
+browser is signed in — nothing to type:
 
 ```bash
-spectrahub token            # prints the token, stores it in ~/.spectrahub/token (mode 600)
-spectrahub token --rotate   # replace it; open sessions must log in again
+spectrahub init --url https://hub.example.com   # --url makes the link point at your public address
+spectrahub login            # print the login link again (for a new phone or laptop)
+spectrahub token            # print the bare token; it lives in ~/.spectrahub/token (mode 600)
+spectrahub token --rotate   # replace it; every device logs in again
 ```
 
-Paste the token into the terminal page once; the browser keeps it. Without it every terminal
-call answers 401, and with no token file at all it answers 403.
+The token travels in the link's `#fragment`, which browsers never send to the server, so it does
+not end up in proxy logs; the page removes it from the address bar at once. Settings (the gear in
+the terminal window) show the token of this device, copy a login link for another device, and
+log out. Treat the link like a password. Without a token every terminal call answers 401, and
+with no token file at all it answers 403.
 
 The terminal is read-only for now: only an exact list of command lines runs (`help` shows it),
 without a shell, with a 15 s limit and a capped output. There is no PTY, so the page says
