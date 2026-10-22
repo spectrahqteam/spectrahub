@@ -64,6 +64,37 @@ const ICON = {
   shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
   clear: '<path d="M4 20h16M7 16 17 6M14 6h3v3"/>',
 };
+// Project looks: 20 icons, 10 colours, or any colour from the picker.
+const PROJECT_ICONS = {
+  folder: '<path d="M3 6h6l2 2h10v11H3z"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
+  heart: '<path d="M12 20s-7-4.4-9-9a4.8 4.8 0 0 1 9-3 4.8 4.8 0 0 1 9 3c-2 4.6-9 9-9 9z"/>',
+  bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
+  rocket: '<path d="M12 15c-2-1-3-2-4-4 1-5 4-8 10-9-1 6-4 9-6 13zM8 11l-4 1 2-4 4-1M13 16l-1 4 4-2 1-4"/><circle cx="14.5" cy="7.5" r="1.3"/>',
+  code: '<path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/>',
+  terminal: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/>',
+  server: '<rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2zM4 19V5"/>',
+  camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+  music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
+  film: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>',
+  cart: '<path d="M3 4h2l2.5 11h10L20 7H6.2"/><circle cx="9" cy="19" r="1.5"/><circle cx="17" cy="19" r="1.5"/>',
+  briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V4h6v3M3 13h18"/>',
+  flask: '<path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7 15h10"/>',
+  leaf: '<path d="M5 19c0-9 6-14 15-15-1 9-6 15-15 15zM5 19l7-7"/>',
+  flame: '<path d="M12 3c1 4 6 6 6 11a6 6 0 0 1-12 0c0-3 2-4 2-7 2 1 3 3 3 5 1-1 1-6 1-9z"/>',
+  shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
+  cube: '<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9"/>',
+};
+const PROJECT_COLORS = ['#d97757', '#e5534b', '#f0a35e', '#d7a85f', '#73c26f', '#56b6c2', '#6c9ef8', '#9d7cf0', '#e06fb0', '#e8e8e8'];
+function projIcon(p) {
+  const i = svgIcon(PROJECT_ICONS[p?.icon] ?? PROJECT_ICONS.folder);
+  i.style.color = p?.color ?? 'var(--muted)';
+  i.classList.add('p-icon');
+  return i;
+}
+
 function logo(id) {
   const t = document.createElement('template');
   t.innerHTML = LOGOS[id] ?? '';
@@ -72,6 +103,7 @@ function logo(id) {
   return svg ?? document.createTextNode('');
 }
 const color = (id) => COLORS[id] ?? '#e8e8e8';
+const displayName = () => info?.displayName || info?.user || '';
 const nameOf = (id) => NAMES[id] ?? id;
 const nearBottom = () => screen.scrollHeight - screen.scrollTop - screen.clientHeight < 80;
 function stick(fn) { const f = nearBottom(); fn(); if (f) screen.scrollTop = screen.scrollHeight; }
@@ -186,7 +218,7 @@ function renderDrawer() {
   const add = el('button', 'd-sec-btn');
   add.type = 'button';
   add.append(svgIcon(ICON.plus), 'projekt');
-  add.addEventListener('click', () => askText('Nowy projekt', '', 'utwórz', async (name) => { await jpost('/api/projects', { name }); await loadAll(); }));
+  add.addEventListener('click', () => projectSheet(null));
   head.append('Projekty', add);
   nodes.push(head);
   if (!projects.length) nodes.push(el('p', 'd-note', 'Projekty grupują sesje jak foldery.'));
@@ -196,7 +228,7 @@ function renderDrawer() {
     const f = el('div', `d-folder${open ? ' open' : ''}`);
     const fb = el('button', 'd-open');
     fb.type = 'button';
-    fb.append(svgIcon(ICON.folder), el('span', 'd-name', p.name), el('span', 'd-count', String(inside.length)));
+    fb.append(projIcon(p), el('span', 'd-name', p.name), el('span', 'd-count', String(inside.length)));
     fb.addEventListener('click', () => {
       openFolders.has(p.id) ? openFolders.delete(p.id) : openFolders.add(p.id);
       store.set(OPEN, JSON.stringify([...openFolders]));
@@ -303,14 +335,10 @@ async function patchSession(id, patch) {
 }
 function moveSheet(s) {
   const pick = (pid) => async () => { closeSheet(); await patchSession(s.id, { projectId: pid }); toast(pid ? 'przeniesiono' : 'bez projektu'); };
-  const rows = projects.map((p) => item(ICON.folder, p.name, pick(p.id), { right: s.projectId === p.id ? svgIcon(ICON.check) : null }));
+  const rows = projects.map((p) => item(projIcon(p), p.name, pick(p.id), { right: s.projectId === p.id ? svgIcon(ICON.check) : null }));
   openSheet('Przenieś do projektu', [
     group(...rows, item(ICON.clear, 'bez projektu', pick(null), { right: !s.projectId ? svgIcon(ICON.check) : null })),
-    group(item(ICON.plus, 'Nowy projekt…', () => askText('Nowy projekt', '', 'utwórz i przenieś', async (name) => {
-      const r = await (await jpost('/api/projects', { name })).json();
-      await patchSession(s.id, { projectId: r.project.id });
-      await loadAll();
-    }))),
+    group(item(ICON.plus, 'Nowy projekt…', () => projectSheet(null, async (p) => { await patchSession(s.id, { projectId: p.id }); }))),
   ], { push: sheetStack.length > 0 });
 }
 function sessionMenu(s) {
@@ -325,6 +353,7 @@ function sessionMenu(s) {
       item(ICON.chart, 'Zużycie', () => usageSheet(true)),
       item(ICON.file, 'Pliki sesji', () => filesSheet(true), { sub: `${full.files?.length ?? 0}` }),
       item(ICON.tasks, 'Zadania w tle', () => runsSheet(true)),
+      item(ICON.clear, compact() ? 'Widok: zwarty' : 'Widok: pełny', () => { store.set(COMPACT, compact() ? '0' : '1'); closeSheet(); renderLog(chat.s); toast(compact() ? 'widok zwarty: praca agentów zwinięta' : 'widok pełny: wszystko rozwinięte'); }, { sub: compact() ? 'praca agentów zwinięta, starsze skrócone' : 'wszystko rozwinięte' }),
     ),
     full && group(
       item(ICON.copy, 'Kopiuj rozmowę', () => { closeSheet(); clip(transcript(full)); }),
@@ -343,7 +372,7 @@ function projectMenu(p) {
   openSheet(p.name, [
     group(
       item(ICON.plus, 'Nowa sesja w projekcie', () => { closeSheet(); closeDrawerOnPhone(); openStart(p.id); }),
-      item(ICON.edit, 'Zmień nazwę', () => askText('Zmień nazwę projektu', p.name, 'zapisz', async (name) => { await jpost(`/api/projects/${p.id}`, { name }, 'PATCH'); await loadAll(); })),
+      item(ICON.edit, 'Nazwa, ikona i kolor', () => projectSheet(p)),
     ),
     group(item(ICON.trash, 'Usuń projekt', () => confirmSheet('Usunąć projekt?', `Sesje z „${p.name}” zostaną, trafią do listy „Ostatnie”.`, 'usuń projekt', async () => {
       await api(`/api/projects/${p.id}`, { method: 'DELETE' });
@@ -351,6 +380,69 @@ function projectMenu(p) {
     }), { danger: true })),
   ]);
 }
+// Create or edit a project: name, one of 20 icons, one of 10 colours or any colour.
+function projectSheet(p, after) {
+  const look = { name: p?.name ?? '', icon: p?.icon ?? 'folder', color: p?.color ?? PROJECT_COLORS[0] };
+  const form = el('form', 's-form');
+  const prev = el('div', 'p-preview');
+  const name = el('input');
+  name.value = look.name;
+  name.placeholder = 'nazwa projektu';
+  name.maxLength = 60;
+  name.autocomplete = 'off';
+  const icons = el('div', 'p-icons');
+  const colors = el('div', 'p-colors');
+  const custom = el('input');
+  custom.type = 'color';
+  custom.value = look.color;
+  custom.setAttribute('aria-label', 'Własny kolor');
+  const draw = () => {
+    prev.replaceChildren(projIcon(look), el('b', null, name.value.trim() || 'nowy projekt'));
+    for (const b of icons.children) { b.classList.toggle('on', b.dataset.icon === look.icon); b.style.color = look.color; }
+    for (const b of colors.querySelectorAll('button')) b.classList.toggle('on', b.dataset.color === look.color);
+  };
+  for (const key of Object.keys(PROJECT_ICONS)) {
+    const b = el('button');
+    b.type = 'button';
+    b.dataset.icon = key;
+    b.setAttribute('aria-label', key);
+    b.append(svgIcon(PROJECT_ICONS[key]));
+    b.addEventListener('click', () => { look.icon = key; draw(); });
+    icons.append(b);
+  }
+  for (const c of PROJECT_COLORS) {
+    const b = el('button');
+    b.type = 'button';
+    b.dataset.color = c;
+    b.style.background = c;
+    b.setAttribute('aria-label', `kolor ${c}`);
+    b.addEventListener('click', () => { look.color = c; custom.value = c; draw(); });
+    colors.append(b);
+  }
+  const pick = el('label', 'p-custom');
+  pick.append(custom, el('span', null, 'własny'));
+  colors.append(pick);
+  custom.addEventListener('input', () => { look.color = custom.value; draw(); });
+  name.addEventListener('input', draw);
+  const ok = el('button', 's-primary', p ? 'zapisz' : 'utwórz projekt');
+  ok.type = 'submit';
+  form.append(prev, name, el('div', 's-label', 'ikona'), icons, el('div', 's-label', 'kolor'), colors, ok);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!name.value.trim()) return name.focus();
+    const body = { name: name.value.trim(), icon: look.icon, color: look.color };
+    const res = p ? await jpost(`/api/projects/${p.id}`, body, 'PATCH') : await jpost('/api/projects', body);
+    if (!res.ok) return toast('nie udało się zapisać projektu');
+    const { project } = await res.json();
+    closeSheet();
+    await loadAll();
+    if (after) await after(project);
+  });
+  draw();
+  openSheet(p ? 'Projekt' : 'Nowy projekt', [form]);
+  if (!p) setTimeout(() => name.focus(), 250);
+}
+
 function transcript(s) {
   const lines = [`# ${s.title}`, ''];
   for (const e of s.log) {
@@ -565,7 +657,8 @@ function renderFooter(d, status) {
   const edits = [...d._steps.values()].map((r) => r._st).filter((st) => st?.kind === 'edit');
   d._files.replaceChildren();
   const seen = new Set();
-  for (const st of edits) for (const id of st.files ?? []) { if (seen.has(id)) continue; seen.add(id); const f = fileById(id); if (f) d._files.append(fileChip(f)); }
+  const ids = [...edits.flatMap((st) => st.files ?? []), ...[...d._steps.values()].flatMap((r) => r._st?.files ?? []), ...(d._entry.files ?? [])];
+  for (const id of ids) { if (seen.has(id)) continue; seen.add(id); const f = fileById(id); if (f) d._files.append(fileChip(f)); }
   d._acts.replaceChildren();
   if (status === 'running') return;
   const text = () => [...d._tl.querySelectorAll('.body')].map((b) => b.textContent).join('\n\n').trim();
@@ -588,6 +681,72 @@ function renderFooter(d, status) {
   }
 }
 
+// Compact view (default): a finished reply folds its work — steps and the text between them — into
+// one line, leaving the answer; older replies and messages show a few lines with "pokaż całość";
+// only the last rounds stay on screen, earlier ones behind a button.
+const COMPACT = 'spectrahub.compact';
+const compact = () => store.get(COMPACT) !== '0';
+function foldWork(d) {
+  if (d._folded || !compact() || !d._steps.size) return;
+  const kids = [...d._tl.children];
+  const lastStep = kids.map((k) => k.classList.contains('step')).lastIndexOf(true);
+  const lastBody = kids.map((k) => k.classList.contains('body')).lastIndexOf(true);
+  const keep = lastBody > lastStep ? kids.slice(lastStep + 1) : lastBody >= 0 ? [kids[lastBody]] : [];
+  const inside = kids.filter((k) => !keep.includes(k));
+  if (!inside.length) return;
+  const steps = inside.filter((k) => k.classList.contains('step') && !k.classList.contains('k-think')).length;
+  const errors = inside.filter((k) => k.classList.contains('s-error')).length;
+  const work = el('div', 'work');
+  const head = el('button', 'wk-head');
+  head.type = 'button';
+  head.append(el('span', 'wk-ic', '▸'), el('b', null, 'Praca'),
+    el('span', 'wk-sum', [`${steps} ${steps === 1 ? 'krok' : steps < 5 ? 'kroki' : 'kroków'}`, d._ms != null ? `${(d._ms / 1000).toFixed(1)} s` : '', errors ? `${errors} ✗` : ''].filter(Boolean).join(' · ')));
+  head.addEventListener('click', () => work.classList.toggle('open'));
+  const body = el('div', 'wk-body');
+  body.append(...inside);
+  work.append(head, body);
+  d._tl.replaceChildren(work, ...keep);
+  d._folded = true;
+}
+// Long text gets a few lines and a button, when it really overflows.
+function clampLong(node, lines) {
+  if (!node || node._clamped || !compact()) return;
+  node.style.setProperty('--lines', lines);
+  node.classList.add('clamp');
+  requestAnimationFrame(() => {
+    if (node.scrollHeight <= node.clientHeight + 4) { node.classList.remove('clamp'); return; }
+    node._clamped = true;
+    const more = el('button', 'more', 'pokaż całość');
+    more.type = 'button';
+    more.addEventListener('click', () => { const on = node.classList.toggle('clamp'); more.textContent = on ? 'pokaż całość' : 'zwiń'; });
+    node.after(more);
+  });
+}
+const KEEP_ROUNDS = 4;
+function tidyLog() {
+  if (!compact() || !chat.s) return;
+  const yous = chat.s.log.filter((e) => e.who === 'you');
+  const lastYou = yous.at(-1)?.n ?? -1;
+  for (const e of chat.s.log) {
+    const d = chat.entries.get(e.n);
+    if (!d) continue;
+    if (e.who === 'you') clampLong(d.querySelector('.you-line'), e.n === lastYou ? 6 : 4);
+    if (d._tl && e.n < lastYou && e.status !== 'running') for (const b of d._tl.querySelectorAll(':scope > .body')) clampLong(b, 8);
+  }
+  // only the last rounds stay; earlier ones wait behind a button
+  if (yous.length > KEEP_ROUNDS && !out.querySelector('.earlier')) {
+    const from = yous.at(-KEEP_ROUNDS).n;
+    const hidden = [...chat.entries.entries()].filter(([n]) => n < from).map(([, d]) => d);
+    if (hidden.length) {
+      hidden.forEach((d) => { d.hidden = true; });
+      const b = el('button', 'earlier', `▴ wcześniejsze wiadomości (${yous.length - KEEP_ROUNDS})`);
+      b.type = 'button';
+      b.addEventListener('click', () => { hidden.forEach((d) => { d.hidden = false; }); b.remove(); });
+      out.prepend(b);
+    }
+  }
+}
+
 function finish(d, status, error) {
   if (!d._tl) return;
   d.querySelector(':scope > .live')?.remove();
@@ -597,6 +756,7 @@ function finish(d, status, error) {
   if (status === 'done' && !d._tl.querySelector('.body') && !error && !d._steps.size) addText(d, '(bez odpowiedzi tekstowej)');
   renderMeta(d, status);
   renderFooter(d, status);
+  if (status !== 'running') foldWork(d);
 }
 
 let speaking = null;
@@ -616,6 +776,7 @@ function renderLog(s) {
   const nodes = [];
   for (const e of s.log) { const d = entryEl(e); chat.entries.set(e.n, d); nodes.push(d); }
   out.replaceChildren(...nodes);
+  tidyLog();
   toBottom();
 }
 
@@ -630,6 +791,7 @@ function onEvent(e) {
     const nd = entryEl(e.entry);
     chat.entries.set(e.entry.n, nd);
     stick(() => out.append(nd));
+    if (e.entry.who === 'you') tidyLog();  // the previous round becomes older
   } else if (e.type === 'delta') { if (d?._tl) stick(() => addText(d, e.s)); }
   else if (e.type === 'step') { if (d?._tl) stick(() => { upsertStep(d, e.step); renderMeta(d, 'running'); renderFooter(d, 'running'); }); }
   else if (e.type === 'usage') { if (d?._tl) { d._usage = e.usage; if (e.ms != null) d._ms = e.ms; renderMeta(d, e.ms != null ? 'done' : 'running'); } }
@@ -642,6 +804,7 @@ function onEvent(e) {
     renderHeader(); renderComposer(); loadSessions();
   } else if (e.type === 'title') { s.title = e.title; renderHeader(); loadSessions(); }
   else if (e.type === 'files') { s.files = e.files; for (const nd of chat.entries.values()) if (nd._tl) renderFooter(nd, nd.querySelector(':scope > .live') ? 'running' : 'done'); }
+  else if (e.type === 'reply-files') { const entry = s.log.find((x) => x.n === e.n); if (entry) entry.files = e.files; if (d?._tl) renderFooter(d, d.querySelector(':scope > .live') ? 'running' : 'done'); }
   else if (e.type === 'limits') { if (s.agents[e.agent]) s.agents[e.agent].limits = e.limits; }
   else if (e.type === 'meta') { for (const [a, m] of Object.entries(e.session.agents ?? {})) Object.assign(s.agents[a] ?? {}, { model: m.model, effort: m.effort }); renderComposer(); }
   else if (e.type === 'deleted') { chat.s = null; showEmpty(); loadSessions(); }
@@ -681,15 +844,30 @@ async function openSession(id) {
   follow(id);
 }
 
+// Under the title: each agent's mark; while it works its name turns into moving dots, when it is done
+// the name comes back with a green dot. The round button beside it opens usage and limits.
 function renderHeader() {
   busyEl.hidden = true;
+  subEl.classList.remove('agents');
   if (view === 'chat' && chat.s) {
-    const names = Object.keys(chat.s.agents);
     titleEl.textContent = chat.s.title;
-    subEl.textContent = `${names.map(nameOf).join(' · ')}${info ? ` · ${info.host}` : ''}`;
-    busyEl.hidden = !Object.values(chat.s.agents).some((a) => a.state === 'busy');
+    subEl.classList.add('agents');
+    subEl.replaceChildren(...Object.entries(chat.s.agents).map(([a, st]) => {
+      const c = el('span', `ag${st.state === 'busy' ? ' busy' : ''}`);
+      c.style.setProperty('--c', color(a));
+      c.title = st.state === 'busy' ? `${nameOf(a)} pracuje` : `${nameOf(a)} gotowy`;
+      c.append(logo(a));
+      if (st.state === 'busy') { const dots = el('span', 'dots'); dots.append(el('i'), el('i'), el('i')); c.append(dots); }
+      else c.append(el('span', 'nm', nameOf(a)), el('span', 'ok'));
+      return c;
+    }));
+    const working = Object.values(chat.s.agents).some((a) => a.state === 'busy');
+    busyEl.hidden = false;
+    busyEl.classList.toggle('busy', working);
+    busyEl.title = working ? 'agenci pracują — zużycie i limity' : 'zużycie i limity';
   }
 }
+busyEl.addEventListener('click', () => { if (chat.s) usageSheet(); });
 
 function agentModel(a) {
   const st = chat.s.agents[a];
@@ -828,16 +1006,23 @@ async function usageSheet(push = false) {
     kv.append(el('span', null, 'tury'), el('b', null, String(u.turns ?? 0)), el('span', null, 'tokeny'), el('b', null, `${tok(u.input ?? 0)} → ${tok(u.output ?? 0)}`));
     if (u.cost) kv.append(el('span', null, 'koszt'), el('b', null, `$${u.cost.toFixed(2)}`));
     card.append(kv);
-    const w = st.limits?.windows;
-    if (w) {
-      card.append(el('div', 's-label', 'limity planu'));
-      if (w.five_hour) card.append(bar(w.five_hour.utilization, 'sesja (5 godz)', `${Math.round(w.five_hour.utilization * 100)}% · ${resetIn(w.five_hour.resetsAt)}`));
-      if (w.seven_day) card.append(bar(w.seven_day.utilization, 'tydzień', `${Math.round(w.seven_day.utilization * 100)}% · ${resetIn(w.seven_day.resetsAt)}`));
+    // limits: a list from the agent; older sessions kept Claude's raw five_hour/seven_day
+    let wins = st.limits?.windows;
+    if (wins && !Array.isArray(wins)) wins = [wins.five_hour && { label: 'sesja (5 godz)', used: wins.five_hour.utilization, resetsAt: wins.five_hour.resetsAt }, wins.seven_day && { label: 'tydzień', used: wins.seven_day.utilization, resetsAt: wins.seven_day.resetsAt }].filter(Boolean);
+    card.append(el('div', 's-label', `limit planu${st.limits?.plan ? ` · ${st.limits.plan}` : ''}`));
+    if (wins?.length) {
+      for (const w of wins) {
+        const left = Math.max(0, Math.round((1 - w.used) * 100));
+        card.append(bar(w.used, `${w.label}: zostało ${left}%`, `${Math.round(w.used * 100)}% użyte · ${resetIn(w.resetsAt)}`));
+      }
+      card.append(el('small', 'u-at', `stan z ${new Date(st.limits.at ?? Date.now()).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`));
+    } else {
+      card.append(el('p', 'u-none', a === 'claude' || a === 'codex' ? 'pojawi się po pierwszej odpowiedzi agenta' : 'agent nie podaje limitu planu — liczy się zużycie tokenów u dostawcy'));
     }
     nodes.push(card);
   }
   nodes.unshift(el('p', 's-note', total ? `Łączny koszt sesji: $${total.toFixed(2)} (tam, gdzie agent go podaje).` : 'Koszt podaje tylko część agentów; reszta liczy się w ich planach.'));
-  openSheet('Zużycie', nodes, { push });
+  openSheet('Zużycie i limity', nodes, { push });
 }
 function filesSheet(push = false) {
   const files = chat.s?.files ?? [];
@@ -1069,7 +1254,7 @@ function showEmpty() {
   const b = el('button', 's-primary', 'Nowa sesja');
   b.type = 'button';
   b.addEventListener('click', () => openStart());
-  box.append(mark, el('b', null, 'Z kim dziś pracujemy?'), el('p', null, 'Wybierz agentów, a każdy dostanie nową sesję. Piszecie razem w jednym oknie.'), b);
+  box.append(mark, el('b', null, info ? `Miło Cię widzieć, ${displayName()}` : 'Miło Cię widzieć'), el('p', null, 'Wybierz agentów, a każdy dostanie nową sesję. Piszecie razem w jednym oknie.'), b);
   const recent = sessions.slice(0, 4);
   if (recent.length) {
     const g = group(...recent.map((s) => { const r = item(el('span', 'd-marks'), s.title, () => openSession(s.id), { sub: ago(s.updatedAt) }); s.agents.forEach((a) => r.firstChild.append(logo(a))); return r; }));
@@ -1110,6 +1295,14 @@ async function openPage(name) {
     const tokCode = el('code', null, '•'.repeat(24));
     let shown = false;
     box.append(
+      el('div', 's-label', 'ty'),
+      group(item(ICON.edit, 'Twoje imię', () => askText('Twoje imię', info?.displayName ?? '', 'zapisz', async (name) => {
+        const r = await jpost('/api/settings', { displayName: name }, 'PATCH');
+        if (!r.ok) return toast('nie udało się');
+        info.displayName = (await r.json()).displayName;
+        showMe();
+        openPage('settings');
+      }), { sub: info?.displayName ?? 'nie ustawione — powitanie użyje nazwy konta' })),
       el('div', 's-label', 'serwer'),
       group(item(ICON.id, `${info?.user}@${info?.host}`, () => {}, { sub: info?.cwdShort })),
       el('div', 's-label', 'to urządzenie'),
@@ -1305,6 +1498,11 @@ async function loadSessions() { const r = await api('/api/sessions'); if (r.ok) 
 async function loadProjects() { const r = await api('/api/projects'); if (r.ok) projects = (await r.json()).projects; }
 async function loadAll() { await Promise.all([loadSessions(), loadProjects()]); renderDrawer(); }
 
+function showMe() {
+  $('avatar').textContent = (displayName()[0] ?? '·').toUpperCase();
+  $('meTxt').textContent = info.displayName ? `${info.displayName} · ${info.host}` : `${info.user}@${info.host}`;
+}
+
 async function connect() {
   if (pairCode && !token) await pair(pairCode);
   let res;
@@ -1316,8 +1514,7 @@ async function connect() {
   info = await res.json();
   if (info.token && !token) { token = info.token; store.set(KEY, token); }
   delete info.token;
-  $('avatar').textContent = (info.user[0] ?? '·').toUpperCase();
-  $('meTxt').textContent = `${info.user}@${info.host}`;
+  showMe();
   shell.line('SpectraHub · shell tylko do odczytu · bez TTY · help', 'note');
   shell.setMode('shell');
   await Promise.all([loadAll(), loadAgents()]);
