@@ -41,6 +41,9 @@ const svgIcon = (d) => {
   return t.content.firstElementChild;
 };
 const ICON = {
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M16 7l3 3M14 9l2 2"/>',
+  cycle: '<path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"/>',
+  badge: '<circle cx="12" cy="9" r="5"/><path d="m9 13.5-1.5 7L12 18l4.5 2.5-1.5-7"/>',
   copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
   play: '<path d="M7 5v14l11-7z"/>',
   pause: '<path d="M8 5v14M16 5v14"/>',
@@ -103,7 +106,7 @@ function logo(id) {
   return svg ?? document.createTextNode('');
 }
 const color = (id) => COLORS[id] ?? '#e8e8e8';
-const displayName = () => info?.displayName || info?.user || '';
+const displayName = () => info?.displayName || info?.host || info?.user || '';  // the name from Settings, else the server's
 const nameOf = (id) => NAMES[id] ?? id;
 const nearBottom = () => screen.scrollHeight - screen.scrollTop - screen.clientHeight < 80;
 function stick(fn) { const f = nearBottom(); fn(); if (f) screen.scrollTop = screen.scrollHeight; }
@@ -651,6 +654,7 @@ function renderMeta(d, status) {
   if (d._ms != null) parts.push(`${(d._ms / 1000).toFixed(1)} s`);
   if (u.input || u.output) parts.push(`${tok(u.input ?? 0)} → ${tok(u.output ?? 0)} tok`);
   if (u.cost != null) parts.push(`$${Number(u.cost).toFixed(2)}`);
+  if (d._entry?.via === 'api') parts.push('klucz API');
   d._meta.textContent = parts.length ? (status === 'running' ? 'w toku · ' : '') + parts.join(' · ') : '';
   if (u.model && !d._head.querySelector('.a-model')) d._head.append(el('small', 'a-model', u.model));
 }
@@ -797,7 +801,16 @@ function onEvent(e) {
     if (e.entry.who === 'you') tidyLog();  // the previous round becomes older
   } else if (e.type === 'delta') { if (d?._tl) stick(() => addText(d, e.s)); }
   else if (e.type === 'step') { if (d?._tl) stick(() => { upsertStep(d, e.step); renderMeta(d, 'running'); renderFooter(d, 'running'); }); }
-  else if (e.type === 'usage') { if (d?._tl) { d._usage = e.usage; if (e.ms != null) d._ms = e.ms; renderMeta(d, e.ms != null ? 'done' : 'running'); } }
+  else if (e.type === 'usage') {
+    if (d?._tl) { d._usage = e.usage; if (e.ms != null) d._ms = e.ms; renderMeta(d, e.ms != null ? 'done' : 'running'); }
+    const who = s.log.find((x) => x.n === e.n)?.who;
+    if (s.agents[who] && e.usage?.context) { Object.assign(s.agents[who].usage ??= {}, { context: e.usage.context, contextWindow: e.usage.contextWindow ?? s.agents[who].usage.contextWindow }); renderHeader(); }
+  } else if (e.type === 'via') {
+    const entry = s.log.find((x) => x.n === e.n);
+    if (entry) entry.via = e.via;
+    if (s.agents[e.agent]) s.agents[e.agent].via = e.via;
+    if (d?._tl) renderMeta(d, 'running');
+  }
   else if (e.type === 'end') {
     if (d) stick(() => finish(d, e.status, e.error));
     const entry = s.log.find((x) => x.n === e.n);
@@ -848,7 +861,20 @@ async function openSession(id) {
 }
 
 // Under the title: each agent's mark; while it works its name turns into moving dots, when it is done
-// the name comes back with a green dot. The round button beside it opens usage and limits.
+// the name comes back with a green dot. The round button beside it opens usage and limits: a gauge at
+// rest; while agents write, the SpectraHub mark sends a signal, its bars lighting up in turn in the
+// colours of the agents at work. Its ring fills as the context of the fullest agent fills.
+const GAUGE = '<path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4-5"/>';
+function signal(list) {
+  const m = el('span', 'sig');
+  m.append(el('i', 'mk-tri'));
+  for (let i = 0; i < 3; i++) { const b = el('i', `mk-ln l${i + 1}`); b.style.setProperty('--c', color(list[i % list.length])); m.append(b); }
+  return m;
+}
+function contextFill(s) {
+  const f = Object.values(s.agents).map((a) => (a.usage?.context && a.usage?.contextWindow ? a.usage.context / a.usage.contextWindow : 0));
+  return Math.min(1, Math.max(0, ...f));
+}
 function renderHeader() {
   busyEl.hidden = true;
   subEl.classList.remove('agents');
@@ -865,10 +891,16 @@ function renderHeader() {
       return c;
     }));
     fitAgents();
-    const working = Object.values(chat.s.agents).some((a) => a.state === 'busy');
+    const working = Object.keys(chat.s.agents).filter((a) => chat.s.agents[a].state === 'busy');
     busyEl.hidden = false;
-    busyEl.classList.toggle('busy', working);
-    busyEl.title = working ? 'agenci pracują — zużycie i limity' : 'zużycie i limity';
+    busyEl.classList.toggle('busy', working.length > 0);
+    if (working.join() !== busyEl.dataset.who) {  // keep the animation running across re-renders
+      busyEl.dataset.who = working.join();
+      busyEl.replaceChildren(working.length ? signal(working) : svgIcon(GAUGE));
+    }
+    const fill = contextFill(chat.s);
+    busyEl.style.setProperty('--fill', fill.toFixed(3));
+    busyEl.title = `${working.length ? `${working.map(nameOf).join(', ')} ${working.length > 1 ? 'pracują' : 'pracuje'} — ` : ''}zużycie i limity${fill ? ` · kontekst ${Math.round(fill * 100)}%` : ''}`;
   }
 }
 busyEl.addEventListener('click', () => { if (chat.s) usageSheet(); });
@@ -927,18 +959,22 @@ const PERM_INFO = {
   write: ['Zapis w folderze pracy', 'zmienia pliki w miejscu pracy sesji', '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 14l5-5 1.5 1.5-5 5H9z"/>'],
   full: ['Pełny dostęp', 'wszystko, co agent potrafi na serwerze', '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M12 8v5M12 16h.01"/>'],
 };
-const PERM_NOTE = { claude: { write: 'bez komend powłoki' }, openclaw: null };
+const PERM_NOTE = {
+  claude: { write: 'bez komend powłoki' },
+  openclaw: { read: 'bez powłoki, zapisu i zmian konfiguracji', write: 'narzędzia plików w obszarze agenta, bez powłoki', full: 'zasady z konfiguracji OpenClaw' },
+};
 function permSheet(a) {
   const st = chat.s.agents[a];
   openSheet(`${nameOf(a)}: uprawnienia`, () => {
-    if (a === 'openclaw') return [el('p', 's-note', 'OpenClaw ustala uprawnienia agenta po swojej stronie (konfiguracja bramki). SpectraHub ich nie nadpisuje.')];
     return [group(...Object.entries(PERM_INFO).map(([k, [label, sub, icon]]) => item(icon, label, async () => {
       await jpost(`/api/sessions/${chat.s.id}`, { perms: { [a]: k } }, 'PATCH');
       st.perm = k;
       renderComposer();
       drawSheet();
     }, { sub: PERM_NOTE[a]?.[k] ? `${sub} — ${PERM_NOTE[a][k]}` : sub, right: (st.perm ?? 'full') === k ? svgIcon(ICON.check) : null }))),
-    el('p', 's-note', 'Dotyczy następnych wiadomości w tej sesji. Agent dalej działa według własnych zasad i hooków.')];
+    el('p', 's-note', a === 'openclaw'
+      ? 'Dotyczy następnych wiadomości w tej sesji. Przy ograniczeniu OpenClaw odpowiada lokalnie, z własną konfiguracją i dodanym zakazem narzędzi — jego pliku konfiguracji SpectraHub nie zmienia.'
+      : 'Dotyczy następnych wiadomości w tej sesji. Agent dalej działa według własnych zasad i hooków.')];
   }, { push: true });
 }
 // Where agents work: this server now; other servers are added in VPS.
@@ -999,7 +1035,7 @@ function modelSheet() {
     nodes.push(el('div', 's-label', 'Uprawnienia'));
     nodes.push(group(...names.map((a) => {
       const p = PERM_INFO[s.agents[a].perm ?? 'full'];
-      const r = item(logo(a), nameOf(a), () => permSheet(a), { sub: a === 'openclaw' ? 'ustala OpenClaw' : p[0], right: svgIcon(ICON.chevron) });
+      const r = item(logo(a), nameOf(a), () => permSheet(a), { sub: p[0], right: svgIcon(ICON.chevron) });
       r.style.setProperty('--c', color(a));
       return r;
     })));
@@ -1089,6 +1125,8 @@ async function usageSheet(push = false) {
     const kv = el('div', 'u-kv');
     kv.append(el('span', null, 'tury w sesji'), el('b', null, String(v.turns ?? 0)), el('span', null, 'tokeny w sesji'), el('b', null, `${tok(v.tokens?.input ?? 0)} → ${tok(v.tokens?.output ?? 0)}`));
     if (v.tokens?.cached) kv.append(el('span', null, 'z pamięci podręcznej'), el('b', null, tok(v.tokens.cached)));
+    const via = chat.s.agents[a]?.via;
+    if (via) kv.append(el('span', null, 'ostatnio przez'), el('b', null, via === 'api' ? 'klucz API' : 'subskrypcję'));
     if (v.cost) kv.append(el('span', null, 'koszt'), el('b', null, `$${v.cost.toFixed(2)}`));
     card.append(kv);
     const wins = v.limits?.windows ?? [];
@@ -1333,6 +1371,22 @@ function setView(v) {
 const HOMES = { chat: 'Rozmowy', vps: 'Serwery', agents: 'Agenci', files: 'Pliki', studio: 'SpectraStudio' };
 let homeName = 'chat';
 const showEmpty = () => home(homeName);
+const greeted = { at: -1e9 };
+// The mark of the start page, built from its four parts so it can fly together the same way.
+function liveMark() {
+  const m = el('span', 'live-mark');
+  m.setAttribute('aria-hidden', 'true');
+  m.append(el('i', 'mk-tri'), el('i', 'mk-ln l1'), el('i', 'mk-ln l2'), el('i', 'mk-ln l3'));
+  return m;
+}
+// A line whose letters drop in one by one and ripple with the mark every few seconds.
+function letters(text) {
+  const b = el('b', 'letters');
+  b.setAttribute('aria-label', text);
+  [...text].forEach((ch, k) => { const c = el('span', null, ch); c.setAttribute('aria-hidden', 'true'); c.style.setProperty('--k', k); b.append(c); });
+  return b;
+}
+
 async function home(section = 'chat') {
   homeName = HOMES[section] ? section : 'chat';
   pageName = homeName === 'chat' ? null : homeName === 'vps' ? 'servers' : homeName;
@@ -1341,10 +1395,12 @@ async function home(section = 'chat') {
   titleEl.textContent = 'SpectraHub';
   subEl.textContent = HOMES[homeName];
   const box = el('div', `home h-${homeName}`);
-  const mark = el('span', 'empty-mark');
-  mark.append(document.querySelector('.brand-mark').cloneNode(true));
   const greet = el('div', 'greet');
-  greet.append(mark, el('b', null, info ? `Miło Cię widzieć, ${displayName()}` : 'Miło Cię widzieć'));
+  const words = info ? `Miło Cię widzieć, ${displayName()}` : 'Miło Cię widzieć';
+  const now = performance.now();
+  if (now - greeted.at > 4000) greeted.at = now;  // the name may arrive a moment later: same flight
+  greet.style.setProperty('--since', `${Math.round(now - greeted.at)}ms`);  // a re-render picks up where it was
+  greet.append(liveMark(), letters(words));
   box.append(greet);
   const body = el('div', 'home-body');
   box.append(body);
@@ -1439,7 +1495,7 @@ async function openPage(name) {
       r.style.setProperty('--c', color(a.id));
       return r;
     })));
-    box.append(host, again, el('p', 's-note', 'Skaner szuka Claude Code, Codex, OpenClaw i DeepSeek Harness: w PATH, w działających usługach systemd i w katalogach npm. Agenci w sesji działają według własnych ustawień i hooków, z pełnymi uprawnieniami.'));
+    box.append(host, again, el('p', 's-note', 'Skaner szuka Claude Code, Codex, OpenClaw i DeepSeek Harness: w PATH, w działających usługach systemd i w katalogach npm. Agenci działają według własnych ustawień i hooków; uprawnienia nadajesz każdemu w sesji, a logowanie (subskrypcja albo API) w Ustawieniach.'));
     out.replaceChildren(box);
     await scanInto(host);
     drawAgents();
@@ -1447,6 +1503,7 @@ async function openPage(name) {
     titleEl.textContent = 'Ustawienia';
     subEl.textContent = info ? `${info.user}@${info.host}` : '';
     const tokCode = el('code', null, '•'.repeat(24));
+    const connHost = el('div');
     let shown = false;
     box.append(
       el('div', 's-label', 'ty'),
@@ -1456,9 +1513,11 @@ async function openPage(name) {
         info.displayName = (await r.json()).displayName;
         showMe();
         openPage('settings');
-      }), { sub: info?.displayName ?? 'nie ustawione — powitanie użyje nazwy konta' })),
+      }), { sub: info?.displayName ?? `nie ustawione — powitanie użyje nazwy serwera (${info?.host ?? 'VPS'})` })),
       el('div', 's-label', 'serwer'),
       group(item(ICON.id, `${info?.user}@${info?.host}`, () => {}, { sub: info?.cwdShort })),
+      el('div', 's-label', 'agenci — logowanie'),
+      connHost,
       el('div', 's-label', 'to urządzenie'),
       group(
         item(ICON.shield, 'Token', () => { shown = !shown; tokCode.textContent = shown ? token : '•'.repeat(24); }, { right: tokCode }),
@@ -1481,6 +1540,7 @@ async function openPage(name) {
       group(item(ICON.trash, 'Wyloguj to urządzenie', () => logout(), { danger: true })),
     );
     out.replaceChildren(box);
+    drawConnections(connHost);
   } else {
     const [t, text, ver] = SOON[name];
     titleEl.textContent = t;
@@ -1489,6 +1549,74 @@ async function openPage(name) {
     out.replaceChildren(box);
   }
   renderDrawer();
+}
+
+// Settings → agents: how each one signs in — subscription, API key, or automatically the key once the
+// plan runs out. A key goes to the server and stays there; the browser only learns where one is.
+let conns = [];
+async function loadConnections() { const r = await api('/api/connections'); if (r.ok) conns = (await r.json()).agents; return conns; }
+function connSummary(c) {
+  const sub = c.subscription ? `subskrypcja ${c.subscription.plan ?? ''}`.trim() : null;
+  if (c.id === 'openclaw') return c.providers?.length ? `${c.providers.map((p) => p.provider).join(' · ')} — ${c.providers.every((p) => p.kind === 'api') ? 'klucze API' : 'API i logowanie'}` : 'dostawcy z konfiguracji OpenClaw';
+  if (!c.switchable) return c.api ? 'klucz API' : 'brak klucza API';
+  if (c.mode === 'subscription') return sub ?? 'subskrypcja';
+  if (c.mode === 'api') return c.api ? 'klucz API' : 'klucz API — brak klucza';
+  if (c.mode === 'auto') return `${sub ?? 'subskrypcja'} → klucz API po limicie`;
+  return `jak w agencie · ${sub ?? (c.api ? 'klucz API' : 'logowanie agenta')}`;
+}
+async function drawConnections(host) {
+  if (!host.childElementCount) host.append(el('p', 's-note', 'sprawdzam logowanie agentów…'));
+  await loadConnections();
+  host.replaceChildren(group(...conns.map((c) => {
+    const r = item(logo(c.id), c.label, () => connSheet(c.id, host), { sub: connSummary(c), right: svgIcon(ICON.chevron) });
+    r.style.setProperty('--c', color(c.id));
+    return r;
+  })));
+}
+function connSheet(id, host) {
+  const refresh = async () => { await loadConnections(); drawSheet(); drawConnections(host); };
+  openSheet(conns.find((x) => x.id === id)?.label ?? id, () => {
+    const c = conns.find((x) => x.id === id);
+    if (!c) return [];
+    if (!c.switchable) {
+      const rows = (c.providers ?? []).map((p) => item(p.kind === 'api' ? ICON.key : ICON.badge, p.provider, () => {}, { sub: `${p.kind === 'api' ? 'klucz API' : 'logowanie (subskrypcja)'} · ${p.where}` }));
+      if (c.id !== 'openclaw') rows.push(item(ICON.key, c.api ? 'klucz API' : 'brak klucza API', () => {}, { sub: c.api?.where ?? '' }));
+      return [el('p', 's-note', c.note ?? ''), group(...rows)];
+    }
+    const set = async (mode) => {
+      const r = await jpost(`/api/connections/${id}`, { mode }, 'PATCH');
+      if (!r.ok) return toast('nie udało się');
+      await refresh();
+      toast(mode ? 'od następnej odpowiedzi agenta' : 'agent loguje się po swojemu');
+    };
+    const sub = c.subscription;
+    const modes = [
+      ['subscription', ICON.badge, 'Subskrypcja', sub ? `${sub.plan ? `plan ${sub.plan} · ` : ''}${sub.where}` : 'agent nie jest tu zalogowany subskrypcją', Boolean(sub)],
+      ['api', ICON.key, 'Klucz API', c.api ? c.api.where : 'najpierw dodaj klucz poniżej', Boolean(c.api)],
+      ['auto', ICON.cycle, 'Automatycznie', 'subskrypcja, a gdy skończy się limit planu — klucz API, aż limit się odnowi', Boolean(sub && c.api)],
+    ].map(([m, icon, label, txt, can]) => item(icon, label, () => (can ? set(m) : toast(m === 'subscription' ? 'zaloguj agenta subskrypcją na serwerze' : 'najpierw dodaj klucz API')),
+      { sub: txt, right: c.mode === m ? svgIcon(ICON.check) : null }));
+    modes.push(item(ICON.shield, 'Bez zmian', () => set(null), { sub: 'SpectraHub nic nie podmienia — agent loguje się po swojemu', right: c.mode ? null : svgIcon(ICON.check) }));
+    const f = el('form', 's-form');
+    const inp = el('input');
+    Object.assign(inp, { type: 'password', placeholder: c.keyHint, autocomplete: 'off', maxLength: 400 });
+    const ok = el('button', 's-primary', c.api?.saved ? 'zamień klucz' : 'zapisz klucz');
+    ok.type = 'submit';
+    f.append(inp, ok);
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!inp.value.trim()) return;
+      const r = await jpost(`/api/connections/${id}/key`, { key: inp.value.trim() }, 'PATCH');
+      inp.value = '';
+      if (!r.ok) return toast((await r.json().catch(() => ({}))).error ?? 'nie udało się');
+      toast('klucz zapisany na serwerze');
+      await refresh();
+    });
+    const keys = [item(ICON.key, c.api ? 'Klucz API jest' : 'Brak klucza API', () => {}, { sub: c.api?.where ?? 'wklej klucz — zostanie tylko na serwerze' })];
+    if (c.api?.saved) keys.push(item(ICON.trash, 'Usuń zapisany klucz', async () => { await jpost(`/api/connections/${id}/key`, { key: '' }, 'PATCH'); await refresh(); }, { danger: true }));
+    return [el('div', 's-label', 'logowanie'), group(...modes), el('div', 's-label', 'klucz API'), group(...keys), f,
+      el('p', 's-note', 'Klucz zostaje na serwerze (plik z prawami 600 w katalogu SpectraHub) i nigdy nie wraca do przeglądarki. Agent dostaje go tylko na czas odpowiedzi; jego własnej konfiguracji SpectraHub nie zmienia.')];
+  });
 }
 
 // ---------- shell (read-only, allowlisted on the server) ----------

@@ -8,6 +8,7 @@ import { join } from 'node:path';
 const dir = mkdtempSync(join(tmpdir(), 'spectrahub-sess-'));
 const bin = join(dir, 'bin');
 const argsLog = join(dir, 'claude-args.log');
+const keyLog = join(dir, 'claude-key.log');
 
 // A stand-in for Claude Code: answers "echo: <last line of the prompt>" in its stream-json format.
 const fakeClaude = `#!${process.execPath}
@@ -19,6 +20,11 @@ process.stdin.on('data', (c) => { input += c; });
 process.stdin.on('end', () => {
   const last = input.trim().split('\\n').filter((l) => l && !l.startsWith('(SpectraHub:')).pop();
   const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+  fs.appendFileSync(${JSON.stringify(keyLog)}, (process.env.ANTHROPIC_API_KEY ?? '-') + '\\n');
+  if (input.includes('LIMIT') && !process.env.ANTHROPIC_API_KEY) {
+    out({ type: 'result', subtype: 'success', is_error: true, result: 'Claude AI usage limit reached|1792700000' });
+    return;
+  }
   out({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'text' } } });
   for (const part of ['echo: ', last]) out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: part } } });
   out({ type: 'assistant', message: { id: 'm1', content: [{ type: 'thinking', thinking: 'najpierw przeczytam plik' }] } });
@@ -273,4 +279,61 @@ test('the owner can set the name the app greets', async () => {
   assert.deepEqual(await res.json(), { displayName: 'Ala' });
   const info = await (await api('/api/terminal/info')).json();
   assert.equal(info.displayName, 'Ala');
+});
+
+test('each agent signs in the way the owner picks: subscription, API key, or auto when the plan runs out', async () => {
+  const lastKey = () => readFileSync(keyLog, 'utf8').trim().split('\n').at(-1);
+  const turn = async (text) => {
+    const { session } = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ agents: ['claude'] }) })).json();
+    await api(`/api/sessions/${session.id}/send`, { method: 'POST', body: JSON.stringify({ to: ['claude'], text }) });
+    return waitIdle(session.id);
+  };
+  const key = 'sk-ant-api03-' + 'x'.repeat(40);
+  assert.equal((await api('/api/connections/claude/key', { method: 'PATCH', body: JSON.stringify({ key: 'nie-klucz' }) })).status, 400);
+  assert.equal((await api('/api/connections/claude/key', { method: 'PATCH', body: JSON.stringify({ key }) })).status, 200);
+  const listed = await (await api('/api/connections')).text();
+  assert.ok(!listed.includes(key), 'the key never goes back to the browser');
+  assert.equal(JSON.parse(listed).agents.find((a) => a.id === 'claude').api.saved, true);
+
+  await api('/api/connections/claude', { method: 'PATCH', body: JSON.stringify({ mode: 'api' }) });
+  let s = await turn('na kluczu');
+  assert.equal(lastKey(), key);
+  assert.equal(s.log.at(-1).via, 'api');
+
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-z-srodowiska-' + 'y'.repeat(30);
+  await api('/api/connections/claude', { method: 'PATCH', body: JSON.stringify({ mode: 'subscription' }) });
+  await turn('na subskrypcji');
+  assert.equal(lastKey(), '-', 'a key in the environment does not override the subscription');
+  delete process.env.ANTHROPIC_API_KEY;
+
+  await api('/api/connections/claude', { method: 'PATCH', body: JSON.stringify({ mode: 'auto' }) });
+  s = await turn('LIMIT');
+  const reply = s.log.at(-1);
+  assert.equal(reply.status, 'done');
+  assert.equal(reply.via, 'api');
+  assert.ok(reply.items.some((i) => i.k === 'step' && /limit subskrypcji/.test(i.title)), 'the switch is shown in the reply');
+  assert.match(reply.s, /echo: LIMIT/);
+
+  await api('/api/connections/claude', { method: 'PATCH', body: JSON.stringify({ mode: null }) });
+  await api('/api/connections/claude/key', { method: 'PATCH', body: JSON.stringify({ key: '' }) });
+  await turn('jak agent');
+  assert.equal(lastKey(), '-', 'with no mode set nothing is handed over');
+});
+
+test('a limited OpenClaw turn runs embedded with a config that includes the owner\'s and only adds denials', async () => {
+  const { adapters } = await import('../src/agents.js');
+  const args = adapters.openclaw.argv('r1', true, { agent: 'a', file: '/tmp/m', perm: 'read' });
+  assert.equal(args[1], '--local');
+  assert.ok(!adapters.openclaw.argv('r1', true, { agent: 'a', file: '/tmp/m', perm: 'full' }).includes('--local'));
+  const out = [];
+  adapters.openclaw.whole('[agents] starting\n{\n "status": "ok",\n "result": { "payloads": [{ "text": "hej" }] }\n}\n', (e) => out.push(e));
+  assert.deepEqual(out.slice(0, 1), [{ type: 'text', s: 'hej', block: true }], 'log lines before the answer are skipped');
+  // an embedded run answers without the gateway envelope, and the turn ends once the document is whole
+  const local = '{\n  "payloads": [{ "text": "ok" }],\n  "meta": { "agentMeta": { "provider": "deepseek", "model": "v4", "usage": { "input": 5, "output": 1 } } }\n}\n';
+  assert.equal(adapters.openclaw.complete(local.slice(0, 30)), false);
+  assert.equal(adapters.openclaw.complete('[log]\n' + local), true);
+  const got = [];
+  adapters.openclaw.whole(local, (e) => got.push(e));
+  assert.deepEqual(got.map((e) => e.type), ['text', 'usage', 'done']);
+  assert.equal(got[1].model, 'deepseek/v4');
 });

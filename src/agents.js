@@ -87,11 +87,13 @@ export function readEnvFile(file) {
   return env;
 }
 
+export const openclawHome = () => process.env.OPENCLAW_HOME ?? join(homedir(), '.openclaw');
+const openclawConfigPath = () => process.env.OPENCLAW_CONFIG_PATH ?? join(openclawHome(), 'openclaw.json');
+
 // OpenClaw's default agent, from its own config (instant), else from its CLI (slow: it boots the app).
 async function openclawAgent(path) {
   try {
-    const home = process.env.OPENCLAW_HOME ?? join(homedir(), '.openclaw');
-    const list = JSON.parse(readFileSync(join(home, 'openclaw.json'), 'utf8')).agents?.list ?? [];
+    const list = JSON.parse(readFileSync(openclawConfigPath(), 'utf8')).agents?.list ?? [];
     const pick = list.find((a) => a.default) ?? list[0];
     if (pick?.id) return pick.id;
   } catch { /* no readable config: ask the CLI */ }
@@ -192,20 +194,49 @@ async function codexModels(rt) {
   };
 }
 
+// OpenClaw's own view of the agent SpectraHub talks to: its model, the models its config lets it
+// switch to, and how each provider signs in. Read from `openclaw models status` (no provider calls),
+// else straight from the config file.
+let ocStatus = { at: 0, agent: null, value: null };
+let ocFlight = null;
+export async function openclawStatus(rt) {
+  if (ocStatus.value && ocStatus.agent === rt.agent && Date.now() - ocStatus.at < 10 * 60_000) return ocStatus.value;
+  ocFlight ??= (async () => {
+    let d = null;
+    try { d = JSON.parse(await run(rt.path, ['models', 'status', '--agent', rt.agent, '--json'], 60000)); } catch { /* read the config */ }
+    if (!Array.isArray(d?.allowed)) d = { ...openclawFromConfig(rt.agent), auth: d?.auth ?? null };
+    ocStatus = { at: Date.now(), agent: rt.agent, value: d };
+    return d;
+  })().finally(() => { ocFlight = null; });
+  return ocFlight;
+}
+
+function openclawFromConfig(agent) {
+  const cfg = jsonFile(openclawConfigPath()) ?? {};
+  const def = cfg.agents?.defaults ?? {};
+  const a = (cfg.agents?.list ?? []).find((x) => x.id === agent) ?? {};
+  const pick = (m) => (typeof m === 'string' ? m : m?.primary) ?? null;
+  const primary = pick(a.model) ?? pick(def.model);
+  const allowed = Object.keys(a.models ?? def.models ?? {});
+  const aliases = Object.fromEntries(Object.entries(a.models ?? def.models ?? {}).filter(([, v]) => v?.alias).map(([id, v]) => [v.alias, id]));
+  return { resolvedDefault: primary, allowed: allowed.length ? allowed : [primary].filter(Boolean), aliases };
+}
+
 async function openclawModels(rt) {
-  const out = await run(rt.path, ['models', 'list'], 45000);
-  const rows = out.split('\n').slice(1).map((l) => l.trim().split(/\s{2,}/)).filter((c) => c.length >= 2 && c[0].includes('/'));
-  const models = rows.map((c) => {
-    const tags = c[c.length - 1] ?? '';
-    return { id: c[0], label: c[0], configured: /configured|default/.test(tags), isDefault: /\bdefault\b/.test(tags),
-      contextWindow: /^(\d+)k$/.test(c[2] ?? '') ? Number(c[2].slice(0, -1)) * 1000 : null, efforts: OPENCLAW_THINKING };
-  }).sort((a, b) => Number(b.configured) - Number(a.configured));
+  const st = await openclawStatus(rt);
+  const cfg = jsonFile(openclawConfigPath()) ?? {};
+  const agent = (cfg.agents?.list ?? []).find((x) => x.id === rt.agent) ?? {};
+  const alias = Object.fromEntries(Object.entries(st.aliases ?? {}).map(([name, id]) => [id, name]));
+  const main = st.resolvedDefault ?? st.defaultModel ?? null;
+  const ids = [...new Set([main, ...st.allowed].filter(Boolean))];
   return {
     configurable: true,
-    models: [{ id: '', label: 'domyślny agenta', efforts: OPENCLAW_THINKING }, ...models],
-    defaultModel: models.find((m) => m.isDefault)?.id ?? null,
-    defaultEffort: null,
+    models: [{ id: '', label: 'domyślny agenta', efforts: OPENCLAW_THINKING },
+      ...ids.map((id) => ({ id, label: id, note: [id === main ? `model agenta ${rt.agent}` : '', alias[id] ? `alias: ${alias[id]}` : ''].filter(Boolean).join(' · '), efforts: OPENCLAW_THINKING }))],
+    defaultModel: main,
+    defaultEffort: agent.thinkingDefault ?? cfg.agents?.defaults?.thinkingDefault ?? null,
     effortLabel: 'thinking',
+    source: `konfiguracja OpenClaw · agent ${rt.agent}`,
   };
 }
 
@@ -465,14 +496,13 @@ const dsh = {
 // OpenClaw: the answer comes as one JSON document at the end, so the steps are read live from the
 // session file the agent writes as it works. Nothing is delivered to channels.
 const openclaw = {
-  argv(ref, _started, { agent, file, model, effort }) {
-    return ['agent', '--agent', agent, '--session-id', ref, '--message-file', file, '--json', '--timeout', '600',
+  argv(ref, _started, { agent, file, model, effort, perm }) {
+    return ['agent', ...(perm === 'read' || perm === 'write' ? ['--local'] : []), '--agent', agent, '--session-id', ref, '--message-file', file, '--json', '--timeout', '600',
       ...(model ? ['--model', model] : []), ...(effort ? ['--thinking', effort] : [])];
   },
   stdin: false,
   tailFile(ref, rt) {
-    const home = process.env.OPENCLAW_HOME ?? join(homedir(), '.openclaw');
-    return join(home, 'agents', rt.agent, 'sessions', `${ref}.jsonl`);
+    return join(openclawHome(), 'agents', rt.agent, 'sessions', `${ref}.jsonl`);
   },
   tail(d, emit) {
     const m = d.type === 'message' ? d.message : null;
@@ -486,10 +516,19 @@ const openclaw = {
       emit({ type: 'step-end', id: m.toolCallId, ok: !m.isError, output: clip(textOf(m.content)) });
     }
   },
+  // The answer is one JSON document; an embedded run (--local) may log lines before it and may keep
+  // running after it, so the turn ends as soon as the document is complete.
+  complete(text) {
+    const i = text.search(/^\{$/m);
+    if (i < 0 || !/\n\}\s*$/.test(text)) return false;
+    try { JSON.parse(text.slice(i)); return true; } catch { return false; }
+  },
   whole(text, emit) {
     let d;
-    try { d = JSON.parse(text); } catch { return emit({ type: 'error', s: short(text.trim() || 'brak odpowiedzi', 400) }); }
-    for (const p of d.result?.payloads ?? []) {
+    try { d = JSON.parse(text.slice(Math.max(0, text.search(/^\{$/m)))); }
+    catch { return emit({ type: 'error', s: short(text.trim() || 'brak odpowiedzi', 400) }); }
+    const r = d.result ?? d;  // through the gateway {status, result: {payloads, meta}}; embedded {payloads, meta}
+    for (const p of r.payloads ?? []) {
       if (p.text) emit({ type: 'text', s: p.text.trimEnd(), block: true });
       // files the agent hands over (mediaUrl / mediaUrls): local ones become file cards in the chat
       for (const m of [p.mediaUrl, ...(Array.isArray(p.mediaUrls) ? p.mediaUrls : [])].filter(Boolean)) {
@@ -497,26 +536,51 @@ const openclaw = {
         if (path.startsWith('/')) emit({ type: 'file', path });
       }
     }
-    const m = d.result?.meta?.agentMeta ?? {};
+    const m = r.meta?.agentMeta ?? {};
     const u = m.usage;
     if (u) {
-      emit({ type: 'usage', input: (u.input ?? 0) + (u.cacheRead ?? 0), output: u.output ?? 0, ms: d.result?.meta?.durationMs ?? null,
+      emit({ type: 'usage', input: (u.input ?? 0) + (u.cacheRead ?? 0), output: u.output ?? 0, ms: r.meta?.durationMs ?? null,
         model: m.model ? `${m.provider ? m.provider + '/' : ''}${m.model}` : null, context: m.promptTokens ?? null, contextWindow: m.contextTokens ?? null });
     }
-    if (d.status !== 'ok') emit({ type: 'error', s: String(d.summary ?? d.status) });
+    if (d.status ? d.status !== 'ok' : r.meta?.aborted) emit({ type: 'error', s: String(d.summary ?? d.status ?? 'przerwane') });
     emit({ type: 'done' });
   },
 };
 
+// OpenClaw takes no per-run tool limits through its gateway, so a limited turn runs embedded
+// (--local) with a small config that includes the owner's own and only adds denials on top.
+// The owner's config file is never written.
+const OPENCLAW_DENY = {
+  read: ['exec', 'process', 'write', 'edit', 'apply_patch', 'gateway', 'cron', 'message', 'sessions_send', 'sessions_spawn', 'codex_session_send', 'browser', 'nodes'],
+  write: ['exec', 'process', 'gateway', 'cron', 'message', 'sessions_send', 'sessions_spawn', 'codex_session_send', 'nodes'],
+};
+function openclawLimits(perm) {
+  const main = openclawConfigPath();
+  const own = jsonFile(main)?.tools?.deny;  // JSON5 configs: we add ours, theirs still apply through the include
+  const dir = join(tmpdir(), 'spectrahub-openclaw');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = join(dir, `${perm}.json`);
+  const tools = { deny: [...new Set([...(Array.isArray(own) ? own : []), ...OPENCLAW_DENY[perm]])], ...(perm === 'write' ? { fs: { workspaceOnly: true } } : {}) };
+  writeFileSync(file, JSON.stringify({ $include: main, tools }), { mode: 0o600 });
+  // the embedded run needs the provider keys the gateway would have: OpenClaw's own .env
+  return { ...readEnvFile(join(openclawHome(), '.env')), OPENCLAW_CONFIG_PATH: file, OPENCLAW_INCLUDE_ROOTS: dirname(main) };
+}
+
 const ADAPTERS = { claude, codex, openclaw, dsh };
 export { ADAPTERS as adapters };  // for tests
+
+// Whether Claude Code already keeps a conversation under this id (~/.claude/projects/<folder>/<id>.jsonl).
+export function claudeHas(ref) {
+  const root = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects');
+  try { return Boolean(ref) && readdirSync(root).some((d) => existsSync(join(root, d, `${ref}.jsonl`))); } catch { return false; }
+}
 
 export function newRef(id) {
   return id === 'codex' || id === 'dsh' ? null : id === 'openclaw' ? `spectrahub-${randomUUID()}` : randomUUID();
 }
 
 // Runs one turn. `emit` receives {type: text|step|step-end|usage|limits|error|ref|done}; the returned function stops it.
-export function turn(rt, { ref, started, prompt, cwd, model, effort, images, perm, ownCwd = false, env: extra = {} }, emit) {
+export function turn(rt, { ref, started, prompt, cwd, model, effort, images, perm, ownCwd = false, env: extra = {}, drop = [] }, emit) {
   const a = Object.create(ADAPTERS[rt.id]);  // per-run state (e.g. dsh: did text already stream)
   let file = null;
   if (rt.id === 'openclaw') {
@@ -528,6 +592,8 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
   const l = rt.launch;
   const env = { ...process.env, ...(l?.envFile ? readEnvFile(l.envFile) : {}), ...(l?.env ?? {}), ...extra, NO_COLOR: '1' };
   if (rt.id === 'dsh') env.DSH_PERMISSION_MODE = { read: 'read-only', write: 'workspace-write', full: 'danger-full-access' }[perm] ?? 'workspace-write';
+  if (rt.id === 'openclaw' && (perm === 'read' || perm === 'write')) Object.assign(env, openclawLimits(perm));
+  for (const k of drop) delete env[k];  // e.g. an API key that must not override the subscription
   const opts = { agent: rt.agent, file, model, effort, images, perm };
   const [bin, args] = l ? [l.node, [l.script, ...a.argv(ref, started, opts)]] : [rt.path, a.argv(ref, started, opts)];
   const child = spawn(bin, args, {
@@ -560,6 +626,7 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
     tailTimer = setInterval(poll, 400);
   }
   let done = false;
+  let settled = false;  // a whole-document answer already handed over
   let buf = '';
   let all = '';
   let err = '';
@@ -567,7 +634,16 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
   const relay = (e) => (e.type === 'done' ? finish(e) : emit(e));
   child.stdout.on('data', (chunk) => {
     const s = chunk.toString('utf8');
-    if (!a.line) { all += s; return; }
+    if (!a.line) {
+      all += s;
+      if (!settled && a.complete?.(all)) {
+        settled = true;
+        if (tailTimer) { clearInterval(tailTimer); tailTimer = null; poll(); }
+        a.whole(all, relay);
+        setTimeout(() => { if (child.exitCode == null && child.signalCode == null) child.kill('SIGTERM'); }, 3000);  // done, but held open
+      }
+      return;
+    }
     buf += s;
     let i;
     while ((i = buf.indexOf('\n')) !== -1) {
@@ -582,7 +658,7 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
   child.on('close', (code, signal) => {
     if (tailTimer) { clearInterval(tailTimer); poll(); }
     if (file) rmSync(file, { force: true });
-    if (a.whole) a.whole(all, relay);
+    if (a.whole && !settled) a.whole(all, relay);
     if (!done) {
       if (signal) emit({ type: 'error', s: 'przerwano' });
       else if (code) emit({ type: 'error', s: short(err.trim().split('\n').pop() || `kod wyjścia ${code}`, 400) });

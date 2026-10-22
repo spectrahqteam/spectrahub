@@ -10,6 +10,7 @@ import { VERSION, paths, defaultDir, readConfig, writeConfig } from './config.js
 import { authCookie, authorize, cookieToken, createPairing, redeemPairing, runLine, terminalInfo } from './terminal.js';
 import { models, scan } from './agents.js';
 import { sessionUsage } from './usage.js';
+import { connections, saveKey, setMode } from './connections.js';
 import {
   attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, recentFiles, runs, saveUpload,
   send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession,
@@ -176,6 +177,15 @@ async function terminalRoute(req, res, url, config) {
     config.displayName = saved.displayName;  // the running server sees it at once
     return json(200, { displayName: saved.displayName });
   }
+  // How each agent signs in: subscription, API key or auto. Keys go in, never out.
+  if (url.pathname === '/api/connections' && req.method === 'GET') return json(200, { agents: await connections({ ...config, dir }) });
+  const conn = /^\/api\/connections\/(\w+)(\/key)?$/.exec(url.pathname);
+  if (conn && req.method === 'PATCH') {
+    let b = {};
+    try { b = JSON.parse(await readBody(req)); } catch { return send(res, 400, 'bad request'); }
+    const r = conn[2] ? saveKey(dir, conn[1], b.key) : setMode(dir, config, conn[1], b.mode);
+    return json(r.error ? 400 : 200, r);
+  }
   if (url.pathname.startsWith('/api/projects')) return projectRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname.startsWith('/api/sessions')) return sessionRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname === '/api/terminal/pair/new' && req.method === 'POST') {
@@ -322,7 +332,7 @@ export function createServer(config) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
     }
-    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|fs\/dirs$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
+    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|fs\/dirs$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
     return serveStatic(res, url.pathname);
   });

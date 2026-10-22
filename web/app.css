@@ -88,12 +88,20 @@ svg{display:block;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:
 .dots i{width:4px;height:4px;border-radius:50%;background:var(--c);animation:hop 1s ease-in-out infinite}
 .dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}
 @keyframes hop{0%,60%,100%{transform:translateY(0);opacity:.45}30%{transform:translateY(-4px);opacity:1}}
-/* usage button: a gauge at rest, a spinner while agents work */
+/* usage button: a gauge at rest; while agents write, the mark sends a signal — its bars light up one
+   after another in the colours of the agents at work. The ring around it fills with the context used. */
 .bar-usage{position:relative;display:grid;place-items:center;width:38px;height:38px;flex:0 0 38px;border-radius:50%;color:var(--muted);border:1px solid var(--line-hi)}
 .bar-usage svg{width:18px;height:18px}
-.bar-usage.busy{border-color:transparent}
-.bar-usage.busy::before{content:"";position:absolute;inset:3px;border-radius:50%;border:2px solid #1d2a3a;border-top-color:var(--accent);animation:spin .9s linear infinite}
-.bar-usage.busy svg{width:14px;height:14px;color:var(--accent)}
+.bar-usage::after{content:"";position:absolute;inset:-1px;border-radius:50%;padding:2px;pointer-events:none;
+  background:conic-gradient(var(--accent) calc(var(--fill,0) * 1turn),transparent 0);
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
+.sig{position:relative;display:block;width:19px;aspect-ratio:20/15.2}
+.sig i{position:absolute;display:block;background:var(--ink)}
+.sig .mk-tri{left:4%;width:57%;top:5.263%;height:89.474%;clip-path:polygon(0 50%,100% 0,100% 100%);animation:sigTri 1.5s ease-in-out infinite}
+.sig .mk-ln{left:73%;width:23%;height:14.474%;transform-origin:left center;background:var(--c);animation:sigBar 1.5s ease-in-out infinite}
+.sig .l1{top:14.474%}.sig .l2{top:44.737%;animation-delay:.18s}.sig .l3{top:75%;animation-delay:.36s}
+@keyframes sigBar{0%,70%,100%{opacity:.25;transform:scaleX(.45)}25%{opacity:1;transform:translateX(30%);box-shadow:0 0 6px var(--c)}}
+@keyframes sigTri{0%,100%{opacity:.9}20%{opacity:1;transform:translateX(-8%)}}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 .screen{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:8px 18px 24px;line-height:1.6;-webkit-overflow-scrolling:touch}
@@ -173,8 +181,29 @@ svg.mark{display:inline-block;width:1em;height:1em;vertical-align:-.15em;margin-
 .screen.as-home #out{height:100%;max-width:640px}
 .home{display:flex;flex-direction:column;min-height:100%;gap:14px;padding:4vh 2px 8px}
 .greet{display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center}
-.greet .brand-mark{width:46px;fill:var(--ink)}
-.greet b{font-size:17px;font-weight:600}
+.greet b{font-size:17px;font-weight:600;white-space:pre-wrap}
+/* the greeting mark assembles like on the start page, the words drop in after it; every 8 s the bars
+   flash and the words ripple, together */
+.live-mark{position:relative;display:block;width:50px;aspect-ratio:20/15.2}
+.live-mark i{position:absolute;display:block;background:var(--ink)}
+.live-mark .mk-tri{left:4%;width:57%;top:5.263%;height:89.474%;clip-path:polygon(0 50%,100% 0,100% 100%);
+  animation:triFly .6s cubic-bezier(.2,.9,.25,1.25) both,nudge 8s ease-in-out infinite;
+  animation-delay:calc(50ms - var(--since,0ms)),calc(5s - var(--since,0ms))}
+.live-mark .mk-ln{left:73%;width:23%;height:14.474%;transform-origin:left center;
+  animation:barShot .4s cubic-bezier(.2,.9,.3,1.35) both,charge 8s ease-in-out infinite,signal 8s ease-in-out infinite;
+  animation-delay:calc(var(--d) - var(--since,0ms)),calc(var(--d) + 4.75s - var(--since,0ms)),calc(var(--d) + 4.75s - var(--since,0ms))}
+.live-mark .l1{top:14.474%;--d:.35s}
+.live-mark .l2{top:44.737%;--d:.47s}
+.live-mark .l3{top:75%;--d:.59s}
+.letters span{display:inline-block;animation:drop .5s cubic-bezier(.2,.9,.3,1.4) both,ripple 8s ease-in-out infinite;
+  animation-delay:calc(.7s + var(--k) * 32ms - var(--since,0ms)),calc(5.45s + var(--k) * 40ms - var(--since,0ms))}
+@keyframes triFly{0%{transform:translateX(-160%) scale(.6);opacity:0}60%{opacity:1}100%{transform:none;opacity:1}}
+@keyframes barShot{0%{transform:translateX(260%) scaleX(.4);opacity:0;background:var(--accent)}70%{background:#fff}100%{transform:none;opacity:1}}
+@keyframes charge{0%,14%,100%{box-shadow:none}6%{box-shadow:0 0 12px 2px rgba(217,119,87,.75)}}
+@keyframes nudge{0%,12%,100%{transform:none}5%{transform:translateX(-7%)}}
+@keyframes signal{0%,14%,100%{transform:none}6%{transform:translateX(14%)}}
+@keyframes drop{0%{opacity:0;transform:translateY(-14px) scale(.7);color:var(--accent)}55%{color:var(--accent)}100%{opacity:1;transform:none;color:var(--ink)}}
+@keyframes ripple{0%,10%,100%{transform:none;color:var(--ink)}4%{transform:translateY(-5px) scale(1.05);color:var(--accent)}}
 .home-body{flex:1;display:flex;flex-direction:column;gap:12px;min-height:0}
 .home-sub{color:var(--muted);font-size:12.5px;line-height:1.6;text-align:center;margin:0 auto;max-width:380px}
 .home .s-primary{width:auto;align-self:center;padding:12px 28px}
