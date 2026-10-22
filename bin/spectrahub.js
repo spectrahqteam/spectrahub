@@ -76,6 +76,7 @@ Usage: spectrahub <command> [options]
   service     install | uninstall the systemd unit
               --system     system-wide unit (needs root)
   login       print a login link: open it and the browser is in (works once, 15 min)
+              --ttl MIN    keep it valid longer, up to a week (still works once)
   token       print the owner token for the terminal (created on first use)
               --rotate     replace it; open sessions must log in again
   version     print version
@@ -88,7 +89,9 @@ Usage: spectrahub <command> [options]
 
   login() {
     const { dir, config } = need();
-    console.log(loginLink(config, createPairing(dir)));
+    // --ttl MINUTES: keep the link valid longer (it still works once), up to a week
+    const minutes = Math.min(Math.max(Number(flag('ttl', 15)) || 15, 1), 7 * 24 * 60);
+    console.log(loginLink(config, createPairing(dir, minutes * 60_000)));
   },
 
   token() {

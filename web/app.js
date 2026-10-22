@@ -1260,7 +1260,7 @@ async function pair(code) {
   try {
     const res = await fetch('/api/terminal/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
     if (res.ok) { token = (await res.json()).token; store.set(KEY, token); toast('to urządzenie jest zalogowane'); }
-    else shell.line('link logowania został już użyty albo wygasł — poproś o nowy (spectrahub login)', 'err');
+    else shell.line('ten link logowania jest już nieważny: działa raz i tylko przez określony czas. Poproś o nowy (na serwerze: spectrahub login).', 'err');
   } catch { shell.line('brak połączenia z serwerem', 'err'); }
 }
 function askToken() {
