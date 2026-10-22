@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VERSION, paths, defaultDir } from './config.js';
-import { authorize, createPairing, redeemPairing, runLine, terminalInfo } from './terminal.js';
+import { authCookie, authorize, cookieToken, createPairing, redeemPairing, runLine, terminalInfo } from './terminal.js';
 import { models, scan } from './agents.js';
 import {
   createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, runs, saveUpload,
@@ -25,6 +25,7 @@ const TYPES = {
   '.png': 'image/png',
   '.ico': 'image/x-icon',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
 
 function healthBody(config) {
@@ -142,7 +143,13 @@ async function terminalRoute(req, res, url, config) {
     let code;
     try { code = JSON.parse(await readBody(req)).code; } catch { return send(res, 400, 'bad request'); }
     const token = redeemPairing(dir, code);
-    return token ? json(200, { token }) : json(401, { error: 'link used or expired' });
+    if (!token) return json(401, { error: 'link used or expired' });
+    res.setHeader('Set-Cookie', authCookie(req, token));
+    return json(200, { token });
+  }
+  if (url.pathname === '/api/terminal/logout' && req.method === 'POST') {
+    res.setHeader('Set-Cookie', authCookie(req, null));
+    return json(200, { ok: true });
   }
   const auth = authorize(req, dir);
   if (auth === 'disabled') return send(res, 403, JSON.stringify({ error: 'terminal disabled', hint: 'spectrahub token' }), 'application/json; charset=utf-8');
@@ -160,7 +167,12 @@ async function terminalRoute(req, res, url, config) {
     return json(200, { code: createPairing(dir), ttlMinutes: 15 });
   }
   if (url.pathname === '/api/terminal/info' && req.method === 'GET') {
-    return send(res, 200, JSON.stringify(terminalInfo(config)), 'application/json; charset=utf-8');
+    // A device that signed in with the token gets the cookie too; one signed in by the cookie
+    // gets the token back, so the page can keep working where storage was wiped.
+    const viaCookie = !String(req.headers.authorization ?? '').startsWith('Bearer ');
+    const token = viaCookie ? cookieToken(req) : String(req.headers.authorization).slice(7).trim();
+    res.setHeader('Set-Cookie', authCookie(req, token));
+    return json(200, { ...terminalInfo(config), ...(viaCookie ? { token } : {}) });
   }
   if (url.pathname === '/api/terminal/run' && req.method === 'POST') {
     let line;

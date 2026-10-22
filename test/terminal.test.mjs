@@ -127,3 +127,21 @@ test('init creates the token and prints a one-time login link', async () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('a login link also leaves a long-lived cookie that signs the device in on its own', async () => {
+  const code = createPairing(dir);
+  const res = await fetch(`${base}/api/terminal/pair`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-Proto': 'https' }, body: JSON.stringify({ code }),
+  });
+  const cookie = res.headers.get('set-cookie');
+  assert.match(cookie, /^spectrahub_auth=[^;]+; Path=\/; Max-Age=31536000; HttpOnly; SameSite=Strict; Secure$/);
+  const jar = cookie.split(';')[0];
+  const info = await fetch(`${base}/api/terminal/info`, { headers: { Cookie: jar } });
+  assert.equal(info.status, 200);
+  assert.equal((await info.json()).token, token, 'storage wiped: the cookie gives the token back');
+  assert.equal((await fetch(`${base}/api/agents`, { headers: { Cookie: 'spectrahub_auth=wrong' } })).status, 401);
+  const out = await fetch(`${base}/api/terminal/logout`, { method: 'POST' });
+  assert.match(out.headers.get('set-cookie'), /^spectrahub_auth=; Path=\/; Max-Age=0/);
+  const viaHeader = await fetch(`${base}/api/terminal/info`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal((await viaHeader.json()).token, undefined, 'the token is only echoed to a cookie login');
+});

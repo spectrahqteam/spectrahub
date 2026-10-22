@@ -120,7 +120,7 @@ let projects = [];
 let view = 'none';   // 'chat' | 'shell' | 'page' | 'none'
 
 async function api(path, opts = {}) {
-  const headers = { ...(opts.headers || {}), Authorization: `Bearer ${token}` };
+  const headers = { ...(opts.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
   if (opts.body && typeof opts.body === 'string') headers['Content-Type'] = 'application/json';
   const res = await fetch(path, { ...opts, headers });
   if (res.status === 401 && token) signedOut('sesja wygasła');
@@ -1124,6 +1124,12 @@ async function openPage(name) {
           clip(url, 'link skopiowany — działa raz, 15 min');
         }, { sub: 'jednorazowy link, ważny 15 minut' }),
       ),
+      el('div', 's-label', 'aplikacja'),
+      group(item(ICON.plus, 'Dodaj do ekranu głównego', async () => {
+        if (installPrompt) { installPrompt.prompt(); installPrompt = null; return; }
+        openSheet('Dodaj do ekranu głównego', [el('p', 's-note', 'W menu przeglądarki wybierz „Dodaj do ekranu głównego” (Chrome, DuckDuckGo) albo „Udostępnij → Do ekranu początkowego” (Safari). SpectraHub otworzy się wtedy jak aplikacja, na pełnym ekranie.'),
+          el('p', 's-note', 'Logowanie pamięta też ciasteczko ważne rok, więc wyczyszczenie danych strony nie wyloguje Cię, dopóki ciasteczko zostaje. W DuckDuckGo oznacz stronę jako „Fireproof”, żeby przycisk ognia go nie kasował.')]);
+      }, { sub: 'otwieraj SpectraHub jak aplikację' })),
       el('p', 's-note', 'Nowy token: na serwerze „spectrahub token --rotate” — wszystkie urządzenia zalogują się ponownie.'),
       group(item(ICON.trash, 'Wyloguj to urządzenie', () => logout(), { danger: true })),
     );
@@ -1274,6 +1280,7 @@ function signedOut(msg) {
   askToken();
 }
 function logout() {
+  fetch('/api/terminal/logout', { method: 'POST' }).catch(() => {});  // drop the login cookie too
   token = null;
   store.del(KEY);
   store.del(LAST);
@@ -1300,12 +1307,15 @@ async function loadAll() { await Promise.all([loadSessions(), loadProjects()]); 
 
 async function connect() {
   if (pairCode && !token) await pair(pairCode);
-  if (!token) return askToken();
   let res;
+  // No token in this browser's storage: the login cookie may still be there (it outlives wiped storage).
   try { res = await api('/api/terminal/info'); } catch { shell.line('brak połączenia z serwerem', 'err'); return askToken(); }
+  if (res.status === 401 && !token) return askToken();
   if (res.status === 403) { shell.line('terminal jest wyłączony na tym serwerze — właściciel włącza go poleceniem: spectrahub token', 'warn'); return askToken(); }
   if (!res.ok) return;
   info = await res.json();
+  if (info.token && !token) { token = info.token; store.set(KEY, token); }
+  delete info.token;
   $('avatar').textContent = (info.user[0] ?? '·').toUpperCase();
   $('meTxt').textContent = `${info.user}@${info.host}`;
   shell.line('SpectraHub · shell tylko do odczytu · bez TTY · help', 'note');
@@ -1317,6 +1327,9 @@ async function connect() {
   else showEmpty();
 }
 
+screen.addEventListener('scroll', () => document.querySelector('.main').classList.toggle('scrolled', screen.scrollTop > 4), { passive: true });
+let installPrompt = null;
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; });
 wide.addEventListener('change', () => { app.classList.remove('drawer-open'); });
 if (wide.matches) app.classList.remove('collapsed');
 showEmpty();

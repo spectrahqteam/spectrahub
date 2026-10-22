@@ -94,13 +94,36 @@ function readToken(dir) {
 const digest = (s) => createHash('sha256').update(s).digest();
 
 // 'disabled' when no token exists yet, 'denied' on a wrong or missing header, 'ok' otherwise.
+export const COOKIE = 'spectrahub_auth';
+
+// The token as a cookie value, if the request carries one.
+export function cookieToken(req) {
+  for (const part of String(req.headers.cookie ?? '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === COOKIE) {
+      try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return null; }
+    }
+  }
+  return null;
+}
+
+// The owner's token from the Authorization header, else from the long-lived login cookie
+// (browsers that wipe page storage on close keep the device signed in that way).
 export function authorize(req, dir) {
   const token = readToken(dir);
   if (!token) return 'disabled';
   const header = req.headers.authorization ?? '';
-  const given = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+  const given = (header.startsWith('Bearer ') ? header.slice(7).trim() : '') || cookieToken(req) || '';
   if (!given) return 'denied';
   return timingSafeEqual(digest(given), digest(token)) ? 'ok' : 'denied';
+}
+
+// HttpOnly so page scripts cannot read it, SameSite=Strict so other sites cannot use it,
+// Secure whenever the page came over HTTPS (directly or through the proxy). One year.
+export function authCookie(req, token) {
+  const secure = req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+  const value = token ? encodeURIComponent(token) : '';
+  return `${COOKIE}=${value}; Path=/; Max-Age=${token ? 31536000 : 0}; HttpOnly; SameSite=Strict${secure ? '; Secure' : ''}`;
 }
 
 export function terminalInfo(config) {
