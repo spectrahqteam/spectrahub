@@ -59,6 +59,7 @@ export function listSessions(config) {
     return s && {
       id: s.id, title: s.title, createdAt: s.createdAt, updatedAt: s.updatedAt, agents: Object.keys(s.agents),
       projectId: s.projectId ?? null, pinned: Boolean(s.pinned), busy: Object.values(s.agents).some((a) => a.state === 'busy'),
+      last: (() => { const e = [...s.log].reverse().find((x) => x.who !== 'system' && x.s); return e ? { who: e.who, s: e.s.replace(/\s+/g, ' ').slice(0, 160) } : null; })(),
     };
   }).filter(Boolean).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

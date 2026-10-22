@@ -257,7 +257,8 @@ function renderDrawer() {
 }
 $('dSearch').addEventListener('input', renderDrawer);
 $('newBtn').addEventListener('click', () => { closeDrawerOnPhone(); openStart(); });
-for (const b of document.querySelectorAll('#dNav button')) b.addEventListener('click', () => { closeDrawerOnPhone(); openPage(b.dataset.page); });
+const NAV_HOME = { agents: 'agents', files: 'files', servers: 'vps', studio: 'studio' };
+for (const b of document.querySelectorAll('#dNav button')) b.addEventListener('click', () => { closeDrawerOnPhone(); NAV_HOME[b.dataset.page] ? home(NAV_HOME[b.dataset.page]) : openPage(b.dataset.page); });
 $('setBtn').addEventListener('click', () => { closeDrawerOnPhone(); openPage('settings'); });
 $('meBtn').addEventListener('click', () => { closeDrawerOnPhone(); openPage('settings'); });
 
@@ -508,6 +509,8 @@ async function openStart(projectId = null) {
     l.append(box, logo(a.id), el('span', 'nm', a.label), el('small', null, a.ready ? (a.agent ? `@${a.id} · @${a.agent}` : `@${a.id}`) : a.note ?? 'niedostępny'));
     list.append(l);
   }
+  let cwd = null;
+  const where = group(item(ICON.folder, 'Miejsce pracy', () => workspaceSheet((dir) => { cwd = dir; sheetStack.pop(); drawSheet(); where.querySelector('small').textContent = `${info?.host ?? ''} · ${dir}`; }, cwd), { sub: `${info?.host ?? ''} · ${info?.cwd ?? ''}`, right: svgIcon(ICON.chevron) }));
   const go = el('button', 's-primary', 'start');
   go.type = 'button';
   go.disabled = !agents.some((a) => a.ready);
@@ -515,7 +518,7 @@ async function openStart(projectId = null) {
     const picked = [...list.querySelectorAll('input:checked')].map((i) => i.value);
     if (!picked.length) return toast('wybierz co najmniej jednego agenta');
     go.disabled = true;
-    const res = await jpost('/api/sessions', { agents: picked });
+    const res = await jpost('/api/sessions', { agents: picked, ...(cwd ? { cwd } : {}) });
     if (!res.ok) { go.disabled = false; return toast('nie udało się otworzyć sesji'); }
     const { session } = await res.json();
     if (projectId) await jpost(`/api/sessions/${session.id}`, { projectId }, 'PATCH');
@@ -524,7 +527,7 @@ async function openStart(projectId = null) {
     openSession(session.id);
   });
   const p = projectId ? projects.find((x) => x.id === projectId) : null;
-  host.replaceChildren(el('p', 's-note', `Wybierz agentów. Każdy dostaje nową sesję i pracujecie razem w jednym oknie.${p ? ` Projekt: ${p.name}.` : ''} Nazwa powstanie z pierwszej wiadomości.`), list, go);
+  host.replaceChildren(el('p', 's-note', `Wybierz agentów. Każdy dostaje nową sesję i pracujecie razem w jednym oknie.${p ? ` Projekt: ${p.name}.` : ''} Nazwa powstanie z pierwszej wiadomości.`), list, where, go);
 }
 
 // ---------- chat ----------
@@ -861,6 +864,7 @@ function renderHeader() {
       else c.append(el('span', 'nm', nameOf(a)), el('span', 'ok'));
       return c;
     }));
+    fitAgents();
     const working = Object.values(chat.s.agents).some((a) => a.state === 'busy');
     busyEl.hidden = false;
     busyEl.classList.toggle('busy', working);
@@ -868,6 +872,15 @@ function renderHeader() {
   }
 }
 busyEl.addEventListener('click', () => { if (chat.s) usageSheet(); });
+// The agents under the title stay on one line: names give way first, then the spacing.
+function fitAgents() {
+  subEl.classList.remove('tight', 'tighter');
+  requestAnimationFrame(() => {
+    if (subEl.scrollWidth > subEl.clientWidth + 1) subEl.classList.add('tight');
+    if (subEl.scrollWidth > subEl.clientWidth + 1) subEl.classList.add('tighter');
+  });
+}
+addEventListener('resize', () => { if (view === 'chat') fitAgents(); });
 
 function agentModel(a) {
   const st = chat.s.agents[a];
@@ -909,6 +922,59 @@ function updateSend() {
 function autosize() { cInput.style.height = 'auto'; cInput.style.height = Math.min(cInput.scrollHeight, 200) + 'px'; }
 
 // The agent sheet: who gets the next line, and with which model and effort.
+const PERM_INFO = {
+  read: ['Tylko odczyt', 'czyta i odpowiada, niczego nie zmienia', '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/>'],
+  write: ['Zapis w folderze pracy', 'zmienia pliki w miejscu pracy sesji', '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 14l5-5 1.5 1.5-5 5H9z"/>'],
+  full: ['Pełny dostęp', 'wszystko, co agent potrafi na serwerze', '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M12 8v5M12 16h.01"/>'],
+};
+const PERM_NOTE = { claude: { write: 'bez komend powłoki' }, openclaw: null };
+function permSheet(a) {
+  const st = chat.s.agents[a];
+  openSheet(`${nameOf(a)}: uprawnienia`, () => {
+    if (a === 'openclaw') return [el('p', 's-note', 'OpenClaw ustala uprawnienia agenta po swojej stronie (konfiguracja bramki). SpectraHub ich nie nadpisuje.')];
+    return [group(...Object.entries(PERM_INFO).map(([k, [label, sub, icon]]) => item(icon, label, async () => {
+      await jpost(`/api/sessions/${chat.s.id}`, { perms: { [a]: k } }, 'PATCH');
+      st.perm = k;
+      renderComposer();
+      drawSheet();
+    }, { sub: PERM_NOTE[a]?.[k] ? `${sub} — ${PERM_NOTE[a][k]}` : sub, right: (st.perm ?? 'full') === k ? svgIcon(ICON.check) : null }))),
+    el('p', 's-note', 'Dotyczy następnych wiadomości w tej sesji. Agent dalej działa według własnych zasad i hooków.')];
+  }, { push: true });
+}
+// Where agents work: this server now; other servers are added in VPS.
+function workspaceSheet(onPick, current) {
+  let path = current || info?.cwd || '';
+  const draw = async () => {
+    const res = await api(`/api/fs/dirs?path=${encodeURIComponent(path)}`);
+    const d = await res.json();
+    path = d.path;
+    const rows = [];
+    if (d.parent) rows.push(item('<path d="M15 18l-6-6 6-6"/>', '..', () => { path = d.parent; draw(); }, { sub: d.parent }));
+    for (const name of d.dirs) rows.push(item(ICON.folder, name, () => { path = `${d.path === '/' ? '' : d.path}/${name}`; draw(); }));
+    const pick = el('button', 's-primary', 'pracuj tutaj');
+    pick.type = 'button';
+    pick.addEventListener('click', async () => { await onPick(d.path); });
+    const quick = el('div', 'effort');
+    for (const [label, p] of [['domowy', d.home], ['obecny', current]].filter(([, p]) => p)) {
+      const b = el('button', 'eff', label);
+      b.type = 'button';
+      b.addEventListener('click', () => { path = p; draw(); });
+      quick.append(b);
+    }
+    const top = sheetStack.at(-1);
+    top.nodes = [
+      el('div', 's-label', 'serwer'),
+      group(item(ICON.check, `ten serwer · ${info?.host ?? ''}`, () => {}, { sub: 'agenci pracują tutaj' }),
+        item('<rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/>', 'inny serwer', () => { closeSheet(); home('vps'); }, { sub: 'dodasz go w VPS — w przygotowaniu (0.5.0)' })),
+      el('div', 's-label', 'folder'), el('div', 'ws-path', d.path), quick, pick, group(...rows),
+      el('p', 's-note', 'OpenClaw pracuje w katalogu swojego agenta. Pozostali agenci zaczną w wybranym folderze od następnej wiadomości.'),
+    ];
+    drawSheet();
+  };
+  openSheet('Miejsce pracy', [el('p', 's-note', 'wczytuję…')], { push: sheetStack.length > 0 });
+  draw();
+}
+
 function modelSheet() {
   const s = chat.s;
   const names = Object.keys(s.agents);
@@ -930,7 +996,22 @@ function modelSheet() {
       r.style.setProperty('--c', color(a));
       return r;
     })));
-    nodes.push(group(item(ICON.shield, 'Uprawnienia agentów', () => {}, { sub: 'pełne — decyzja właściciela; agenci działają według własnych zasad' })));
+    nodes.push(el('div', 's-label', 'Uprawnienia'));
+    nodes.push(group(...names.map((a) => {
+      const p = PERM_INFO[s.agents[a].perm ?? 'full'];
+      const r = item(logo(a), nameOf(a), () => permSheet(a), { sub: a === 'openclaw' ? 'ustala OpenClaw' : p[0], right: svgIcon(ICON.chevron) });
+      r.style.setProperty('--c', color(a));
+      return r;
+    })));
+    nodes.push(el('div', 's-label', 'Miejsce pracy'));
+    nodes.push(group(item(ICON.folder, s.cwd ?? info?.cwd ?? '', () => workspaceSheet(async (dir) => {
+      const r = await jpost(`/api/sessions/${s.id}`, { cwd: dir }, 'PATCH');
+      if (!r.ok) return toast('to nie jest folder na tym serwerze');
+      s.cwd = dir;
+      sheetStack.pop();
+      drawSheet();
+      toast('agenci pracują teraz w ' + dir);
+    }, s.cwd), { sub: `serwer ${info?.host ?? ''}`, right: svgIcon(ICON.chevron) })));
     return nodes;
   };
   openSheet('Agent i model', build);
@@ -985,44 +1066,47 @@ function resetIn(ts) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
   return h >= 24 ? `reset ${new Date(ts * 1000).toLocaleString('pl-PL', { weekday: 'short', hour: '2-digit', minute: '2-digit' })}` : `reset za ${h ? `${h} godz ` : ''}${m} min`;
 }
+// Usage and limits, read by the server from each agent's own records at the moment of opening.
 async function usageSheet(push = false) {
-  const res = await api(`/api/sessions/${chat.s.id}`);
-  if (res.ok) chat.s = { ...chat.s, ...(await res.json()).session };
-  const s = chat.s;
+  openSheet('Zużycie i limity', [el('p', 's-note', 'pobieram dane od agentów…')], { push });
+  const top = sheetStack.at(-1);
+  const res = await api(`/api/sessions/${chat.s.id}/usage`);
+  if (!res.ok) { top.nodes = [el('p', 's-note', 'nie udało się pobrać zużycia')]; return drawSheet(); }
+  const { agents: list, at } = await res.json();
   const nodes = [];
   let total = 0;
-  for (const [a, st] of Object.entries(s.agents)) {
-    const u = st.usage ?? {};
-    total += u.cost ?? 0;
+  for (const [a, v] of Object.entries(list)) {
+    total += v.cost ?? 0;
     const card = el('div', 'u-card');
     card.style.setProperty('--c', color(a));
     const h = el('div', 'u-head');
-    h.append(logo(a), el('b', null, nameOf(a)), el('small', null, u.model ?? agentModel(a).label));
+    h.append(logo(a), el('b', null, nameOf(a)), el('small', null, v.model ?? agentModel(a).label));
     card.append(h);
-    const win = u.contextWindow ?? catalog[a]?.models?.find((m) => m.id === (st.model || catalog[a]?.defaultModel))?.contextWindow;
-    if (u.context && win) card.append(bar(u.context / win, 'okno kontekstu', `${tok(u.context)} z ${tok(win)} · ${Math.round(u.context / win * 100)}%`));
-    else if (u.context) card.append(el('div', 'u-row', `kontekst: ${tok(u.context)} tok`));
+    if (v.context?.used && v.context.window) {
+      const left = Math.max(0, v.context.window - v.context.used);
+      card.append(bar(v.context.used / v.context.window, `kontekst: zostało ${tok(left)}`, `${tok(v.context.used)} z ${tok(v.context.window)} · ${Math.round(v.context.used / v.context.window * 100)}%`));
+    } else card.append(el('p', 'u-none', 'kontekst: agent jeszcze go nie podał'));
     const kv = el('div', 'u-kv');
-    kv.append(el('span', null, 'tury'), el('b', null, String(u.turns ?? 0)), el('span', null, 'tokeny'), el('b', null, `${tok(u.input ?? 0)} → ${tok(u.output ?? 0)}`));
-    if (u.cost) kv.append(el('span', null, 'koszt'), el('b', null, `$${u.cost.toFixed(2)}`));
+    kv.append(el('span', null, 'tury w sesji'), el('b', null, String(v.turns ?? 0)), el('span', null, 'tokeny w sesji'), el('b', null, `${tok(v.tokens?.input ?? 0)} → ${tok(v.tokens?.output ?? 0)}`));
+    if (v.tokens?.cached) kv.append(el('span', null, 'z pamięci podręcznej'), el('b', null, tok(v.tokens.cached)));
+    if (v.cost) kv.append(el('span', null, 'koszt'), el('b', null, `$${v.cost.toFixed(2)}`));
     card.append(kv);
-    // limits: a list from the agent; older sessions kept Claude's raw five_hour/seven_day
-    let wins = st.limits?.windows;
-    if (wins && !Array.isArray(wins)) wins = [wins.five_hour && { label: 'sesja (5 godz)', used: wins.five_hour.utilization, resetsAt: wins.five_hour.resetsAt }, wins.seven_day && { label: 'tydzień', used: wins.seven_day.utilization, resetsAt: wins.seven_day.resetsAt }].filter(Boolean);
-    card.append(el('div', 's-label', `limit planu${st.limits?.plan ? ` · ${st.limits.plan}` : ''}`));
-    if (wins?.length) {
-      for (const w of wins) {
-        const left = Math.max(0, Math.round((1 - w.used) * 100));
-        card.append(bar(w.used, `${w.label}: zostało ${left}%`, `${Math.round(w.used * 100)}% użyte · ${resetIn(w.resetsAt)}`));
-      }
-      card.append(el('small', 'u-at', `stan z ${new Date(st.limits.at ?? Date.now()).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}`));
-    } else {
-      card.append(el('p', 'u-none', a === 'claude' || a === 'codex' ? 'pojawi się po pierwszej odpowiedzi agenta' : 'agent nie podaje limitu planu — liczy się zużycie tokenów u dostawcy'));
+    const wins = v.limits?.windows ?? [];
+    if (wins.length) {
+      card.append(el('div', 's-label', `limit planu${v.limits.plan ? ` · ${v.limits.plan}` : ''}`));
+      for (const w of wins) card.append(bar(w.used, `${w.label}: zostało ${Math.max(0, Math.round((1 - w.used) * 100))}%`, `${Math.round(w.used * 100)}% użyte · ${resetIn(w.resetsAt)}`));
     }
+    if (v.balance) {
+      card.append(el('div', 's-label', 'saldo API'));
+      card.append(v.balance.error ? el('p', 'u-none', v.balance.error) : el('div', 'u-bal', `${v.balance.amount.toFixed(2)} ${v.balance.currency}${v.balance.available ? '' : ' · niedostępne'}`));
+    }
+    if (v.credits) card.append(el('p', 'u-none', `kredyty Codex: ${v.credits.amount}${v.credits.available ? '' : ' (brak dokupionych)'}`));
+    if (!wins.length && !v.balance) card.append(el('p', 'u-none', a === 'claude' || a === 'codex' ? 'limit planu pojawi się po pierwszej odpowiedzi agenta' : 'agent nie podaje limitu planu'));
+    card.append(el('small', 'u-at', `źródło: ${v.source ?? 'zapis sesji'}${v.limits?.at ? ` · limity z ${new Date(v.limits.at).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}` : ''}`));
     nodes.push(card);
   }
-  nodes.unshift(el('p', 's-note', total ? `Łączny koszt sesji: $${total.toFixed(2)} (tam, gdzie agent go podaje).` : 'Koszt podaje tylko część agentów; reszta liczy się w ich planach.'));
-  openSheet('Zużycie i limity', nodes, { push });
+  nodes.unshift(el('p', 's-note', `${total ? `Koszt sesji: $${total.toFixed(2)} (gdzie agent go podaje). ` : ''}Stan z ${new Date(at).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })}, prosto od agentów.`));
+  if (sheetStack.at(-1) === top) { top.nodes = nodes; top.title = 'Zużycie i limity'; drawSheet(); }
 }
 function filesSheet(push = false) {
   const files = chat.s?.files ?? [];
@@ -1228,6 +1312,7 @@ const shellOut = el('div');
 let pageName = null;
 function setView(v) {
   view = v;
+  screen.classList.remove('as-home');
   cmd.hidden = v !== 'shell';
   composer.hidden = v !== 'chat';
   screen.classList.toggle('as-page', v === 'page' || v === 'none');
@@ -1243,24 +1328,93 @@ function setView(v) {
   renderHeader();
   renderDrawer();
 }
-function showEmpty() {
-  pageName = null;
+// "Miło Cię widzieć" — the home of each section: the chat shows the last sessions, VPS this server,
+// Agents the scan, Files the newest files, Studio what it will be.
+const HOMES = { chat: 'Rozmowy', vps: 'Serwery', agents: 'Agenci', files: 'Pliki', studio: 'SpectraStudio' };
+let homeName = 'chat';
+const showEmpty = () => home(homeName);
+async function home(section = 'chat') {
+  homeName = HOMES[section] ? section : 'chat';
+  pageName = homeName === 'chat' ? null : homeName === 'vps' ? 'servers' : homeName;
   setView('none');
+  screen.classList.add('as-home');
   titleEl.textContent = 'SpectraHub';
-  subEl.textContent = info ? `${info.user}@${info.host}` : '';
-  const box = el('div', 'empty');
+  subEl.textContent = HOMES[homeName];
+  const box = el('div', `home h-${homeName}`);
   const mark = el('span', 'empty-mark');
   mark.append(document.querySelector('.brand-mark').cloneNode(true));
-  const b = el('button', 's-primary', 'Nowa sesja');
-  b.type = 'button';
-  b.addEventListener('click', () => openStart());
-  box.append(mark, el('b', null, info ? `Miło Cię widzieć, ${displayName()}` : 'Miło Cię widzieć'), el('p', null, 'Wybierz agentów, a każdy dostanie nową sesję. Piszecie razem w jednym oknie.'), b);
-  const recent = sessions.slice(0, 4);
-  if (recent.length) {
-    const g = group(...recent.map((s) => { const r = item(el('span', 'd-marks'), s.title, () => openSession(s.id), { sub: ago(s.updatedAt) }); s.agents.forEach((a) => r.firstChild.append(logo(a))); return r; }));
-    box.append(el('div', 's-label', 'Ostatnie sesje'), g);
-  }
+  const greet = el('div', 'greet');
+  greet.append(mark, el('b', null, info ? `Miło Cię widzieć, ${displayName()}` : 'Miło Cię widzieć'));
+  box.append(greet);
+  const body = el('div', 'home-body');
+  box.append(body);
   out.replaceChildren(box);
+  renderDrawer();
+  const newBtn = (label = 'Nowa sesja') => { const b = el('button', 's-primary', label); b.type = 'button'; b.addEventListener('click', () => openStart()); return b; };
+  if (homeName === 'chat') {
+    body.append(el('p', 'home-sub', 'Wybierz agentów, a każdy dostanie nową sesję. Piszecie razem w jednym oknie.'), newBtn());
+    const cards = el('div', 'h-cards');
+    for (const s of sessions.slice(0, 3)) {
+      const c = el('button', 'h-card');
+      c.type = 'button';
+      const marks = el('span', 'd-marks');
+      s.agents.forEach((a) => marks.append(logo(a)));
+      const top = el('span', 'h-top');
+      const proj = projects.find((p) => p.id === s.projectId);
+      top.append(marks, el('b', null, s.title), el('small', null, ago(s.updatedAt)));
+      c.append(top);
+      if (proj) { const pr = el('span', 'h-proj'); pr.append(projIcon(proj), proj.name); c.append(pr); }
+      if (s.last) c.append(el('span', 'h-last', `${s.last.who === 'you' ? 'Ty' : nameOf(s.last.who)}: ${s.last.s}`));
+      if (s.busy) c.append(el('span', 'h-busy', 'agenci pracują'));
+      c.addEventListener('click', () => openSession(s.id));
+      cards.append(c);
+    }
+    if (!sessions.length) cards.append(el('p', 's-note', 'Tu pojawią się Twoje ostatnie sesje.'));
+    body.append(cards);
+  } else if (homeName === 'vps') {
+    body.append(el('p', 'home-sub', 'Stan serwerów w jednym miejscu. Na razie ten, na którym działa SpectraHub.'));
+    const card = el('div', 'u-card sys');
+    body.append(card);
+    const r = await api('/api/system');
+    if (!r.ok) { card.append(el('p', 'u-none', 'nie udało się odczytać serwera')); return; }
+    const d = await r.json();
+    const days = Math.floor(d.uptime / 86400), hours = Math.floor((d.uptime % 86400) / 3600);
+    const h = el('div', 'u-head');
+    h.append(svgIcon(PROJECT_ICONS.server), el('b', null, d.host), el('small', null, 'ten serwer'));
+    card.append(h);
+    const gb = (n) => `${(n / 1073741824).toFixed(1)} GB`;
+    if (d.disk) card.append(bar(1 - d.disk.free / d.disk.total, `dysk: wolne ${gb(d.disk.free)}`, `${gb(d.disk.total - d.disk.free)} z ${gb(d.disk.total)}`));
+    card.append(bar(1 - d.memory.free / d.memory.total, `RAM: wolne ${gb(d.memory.free)}`, `${gb(d.memory.total - d.memory.free)} z ${gb(d.memory.total)}`));
+    const kv = el('div', 'u-kv');
+    kv.append(el('span', null, 'system'), el('b', null, d.os), el('span', null, 'działa od'), el('b', null, `${days} dni ${hours} godz`),
+      el('span', null, 'obciążenie'), el('b', null, d.load.join(' · ')), el('span', null, 'procesory'), el('b', null, String(d.cpus)), el('span', null, 'SpectraHub'), el('b', null, d.version));
+    card.append(kv, el('small', 'u-at', `pomiar ${new Date(d.at).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`));
+    body.append(group(item(ICON.plus, 'Dodaj serwer', () => toast('w przygotowaniu — wersja 0.5.0'), { sub: 'dostęp do innych serwerów: dodasz go tutaj (0.5.0)' }),
+      item('<path d="m5 7 5 5-5 5M12 17h7"/>', 'Terminal tego serwera', () => openPage('shell'), { sub: 'tylko odczyt' })));
+  } else if (homeName === 'agents') {
+    body.append(el('p', 'home-sub', 'Agenci znalezieni na tym serwerze. Każdy pracuje według własnych zasad.'));
+    const host = el('div');
+    body.append(host, newBtn('Nowa sesja z agentami'));
+    await scanInto(host);
+    host.replaceChildren(group(...agents.map((a) => {
+      const r = item(logo(a.id), a.label, () => {}, { sub: a.ready ? [a.version, a.agent && `@${a.agent}`, a.via].filter(Boolean).join(' · ') : a.installed ? a.note ?? 'niedostępny' : 'nie znaleziono', right: el('span', `dotx ${a.ready ? 'ok' : a.installed ? 'warn' : ''}`) });
+      r.style.setProperty('--c', color(a.id));
+      return r;
+    })));
+  } else if (homeName === 'files') {
+    body.append(el('p', 'home-sub', 'Najnowsze pliki z Twoich sesji: Twoje załączniki i to, co zapisali agenci.'));
+    const r = await api('/api/files/recent');
+    const { files } = r.ok ? await r.json() : { files: [] };
+    body.append(files.length ? group(...files.map(({ session, title, file }) => item(file.type?.startsWith('image/') ? ICON.image : ICON.file, file.name, async () => { await openSession(session); openFile(file); },
+      { sub: `${file.from === 'you' ? 'od Ciebie' : `od ${nameOf(file.from)}`} · ${title} · ${ago(file.at)}` }))) : el('p', 's-note', 'Nie ma jeszcze plików.'));
+    body.append(el('p', 's-note', 'Drzewo plików serwera z podglądem: wersja 0.4.0.'));
+  } else if (homeName === 'studio') {
+    const card = el('div', 'u-card');
+    const h = el('div', 'u-head');
+    h.append(svgIcon(ICON.image), el('b', null, 'SpectraStudio'), el('small', null, 'osobny produkt'));
+    card.append(h, el('p', 's-note', 'Generowanie obrazów, wideo i audio — w przygotowaniu. Pliki, które agenci wygenerują już dziś, znajdziesz w Plikach.'));
+    body.append(card);
+  }
 }
 const SOON = {
   files: ['Pliki', 'Drzewo plików i podgląd, tylko do odczytu, z listą dozwolonych katalogów. Pliki z rozmów są już w menu sesji.', '0.4.0'],
@@ -1519,9 +1673,11 @@ async function connect() {
   shell.setMode('shell');
   await Promise.all([loadAll(), loadAgents()]);
   loadModels();
+  const go = new URLSearchParams(location.search).get('go');
+  if (go) { history.replaceState(null, '', location.pathname + location.hash); return home(go); }
   const last = store.get(LAST);
   if (last && sessions.some((s) => s.id === last)) openSession(last);
-  else showEmpty();
+  else home('chat');
 }
 
 screen.addEventListener('scroll', () => document.querySelector('.main').classList.toggle('scrolled', screen.scrollTop > 4), { passive: true });

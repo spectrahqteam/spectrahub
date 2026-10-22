@@ -9,7 +9,7 @@ const tiles = [...map.querySelectorAll('.tile')];
 const reduce = matchMedia('(prefers-reduced-motion: reduce)');
 const desktop = matchMedia('(min-width: 1024px)');
 
-const DRAW_START = 650;   // ms after load, once the mark has settled
+const DRAW_START = 1500;  // ms after load: the mark has flown in and burst, the name has dropped
 const DRAW_MS = 750;
 const LOWER_DELAY = 300;  // the lower row starts after the side wires
 const LINK_MS = 520;      // phones: each link from one row of tiles to the next
