@@ -30,6 +30,7 @@ function load(config, id) {
   if (!existsSync(file)) return null;
   const s = JSON.parse(readFileSync(file, 'utf8'));
   for (const a of Object.values(s.agents)) a.state = 'idle';  // a restart ends any run in flight
+  for (const e of s.log) if (e.status === 'running') { e.status = 'error'; e.error = 'przerwane: serwer SpectraHub został uruchomiony ponownie'; }
   // Sessions from before automatic names carry a date; name them after their first line instead.
   const first = s.log.find((e) => e.who === 'you' && e.s);
   if (first && /^sesja \d{4}-\d\d-\d\d \d\d:\d\d$/.test(s.title)) { s.title = titleFrom(first.s); s.autoTitle = false; save(config, s); }
