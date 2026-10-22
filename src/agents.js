@@ -550,9 +550,12 @@ const openclaw = {
 // OpenClaw takes no per-run tool limits through its gateway, so a limited turn runs embedded
 // (--local) with a small config that includes the owner's own and only adds denials on top.
 // The owner's config file is never written.
+// Named by OpenClaw's own tool groups, so it holds on any install; plugin tools are left out
+// entirely, since nothing tells what a plugin's tool may change.
 const OPENCLAW_DENY = {
-  read: ['exec', 'process', 'write', 'edit', 'apply_patch', 'gateway', 'cron', 'message', 'sessions_send', 'sessions_spawn', 'codex_session_send', 'browser', 'nodes'],
-  write: ['exec', 'process', 'gateway', 'cron', 'message', 'sessions_send', 'sessions_spawn', 'codex_session_send', 'nodes'],
+  read: ['group:runtime', 'write', 'edit', 'apply_patch', 'group:automation', 'group:messaging', 'group:nodes', 'group:ui', 'group:plugins',
+    'sessions_send', 'sessions_spawn', 'subagents', 'image_generate', 'music_generate', 'video_generate'],
+  write: ['group:runtime', 'group:automation', 'group:messaging', 'group:nodes', 'group:plugins', 'sessions_send', 'sessions_spawn', 'subagents'],
 };
 function openclawLimits(perm) {
   const main = openclawConfigPath();

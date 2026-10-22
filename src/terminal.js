@@ -127,7 +127,7 @@ export function authCookie(req, token) {
 }
 
 export function terminalInfo(config) {
-  const cwd = config.terminal?.cwd ?? process.cwd();
+  const cwd = config.terminal?.cwd ?? homedir();  // the owner's home, not where the service starts
   const home = homedir();
   return {
     user: userInfo().username,
@@ -146,7 +146,7 @@ function sse(res, event, data) {
 
 // Streams one allowed command. The child is killed when the client goes away or the time runs out.
 export function runLine(config, line, res) {
-  const cwd = config.terminal?.cwd ?? process.cwd();
+  const cwd = config.terminal?.cwd ?? homedir();  // the owner's home, not where the service starts
   const key = String(line ?? '').trim().replace(/\s+/g, ' ');
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',

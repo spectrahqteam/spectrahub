@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, normalize } from 'node:path';
+import { homedir } from 'node:os';
 import { claudeHas, codexLimits, PERMS, scan, turn, newRef } from './agents.js';
 import { launchAuth, limitHit, LIMIT_TEXT } from './connections.js';
 
@@ -298,7 +299,7 @@ export async function createSession(config, { agents, title, cwd, perms = {} }) 
     autoTitle: !String(title || '').trim(),
     createdAt: now,
     updatedAt: now,
-    cwd: validDir(cwd) ?? config.agents?.cwd ?? config.terminal?.cwd ?? process.cwd(),
+    cwd: validDir(cwd) ?? config.agents?.cwd ?? config.terminal?.cwd ?? homedir(),  // not the service's own folder
     cwdChosen: Boolean(validDir(cwd)),
     agents: Object.fromEntries(picked.map((id) => [id, { ref: newRef(id), started: false, synced: now, state: 'idle', perm: PERMS.includes(perms[id]) ? perms[id] : 'full' }])),
     log: [{ n: 0, who: 'system', s: `sesja otwarta · agenci: ${picked.join(', ')}`, at: now }],
