@@ -1,5 +1,5 @@
-// Start screen motion: draws the branches from the mark to each tile, reveals each tile
-// when its branch reaches it, then keeps comets running along the branches. No dependencies.
+// Start screen motion: once the tiles are in, draws the branches from the mark to each tile,
+// then keeps comets running along the branches. No dependencies.
 const NS = 'http://www.w3.org/2000/svg';
 const map = document.getElementById('map');
 const svg = map.querySelector('.traces');
@@ -9,7 +9,7 @@ const tiles = [...map.querySelectorAll('.tile')];
 const reduce = matchMedia('(prefers-reduced-motion: reduce)');
 const desktop = matchMedia('(min-width: 1024px)');
 
-const DRAW_START = 1500;  // ms after load: the mark has flown in and burst, the name has dropped
+const DRAW_START = 2700;  // ms after load: the mark, the name and then every tile are in
 const DRAW_MS = 750;
 const LOWER_DELAY = 300;  // the lower row starts after the side wires
 const LINK_MS = 520;      // phones: each link from one row of tiles to the next
@@ -18,7 +18,7 @@ const SPEED = 0.085;      // px per ms
 const HOT_SPEED = 0.26;
 
 let comets = [];
-let first = true;
+const bootAt = performance.now();  // the intro's clock: a rebuild mid-intro keeps its schedule
 let hot = null;
 let startAt = 0;
 const owner = new Map();  // branch path -> tile
@@ -109,14 +109,10 @@ function el(name, attrs) {
   return e;
 }
 
-// Reveal each tile when its branch arrives; CSS delays cover no-JS.
-function revealAt(tile, ms) {
-  tile.style.animationDelay = `${Math.round(ms)}ms, 0s, 0s`;
-}
 
 
 function build() {
-  const animate = first && !reduce.matches;
+  const since = performance.now() - bootAt;
   const { traces, joints } = desktop.matches ? desktopTraces() : gridTraces();
   svg.replaceChildren();
   comets = [];
@@ -129,19 +125,20 @@ function build() {
     const len = path.getTotalLength();
     const [ex, ey] = tr.pts[tr.pts.length - 1];
     const ms = tr.ms || DRAW_MS;
-    const done = tr.delay + ms;
+    const wait = tr.delay - since;          // time left before this branch starts drawing
+    const animate = !reduce.matches && wait + ms > 0;
 
+    // An animation, not a transition: a transition needs a painted frame first and the page may
+    // not have one yet, so the branch would show up drawn before its tile.
     if (animate) {
       path.style.strokeDasharray = `${len}`;
-      path.style.strokeDashoffset = `${len}`;
-      path.style.transition = `stroke-dashoffset ${ms}ms cubic-bezier(.45,.05,.25,1) ${tr.delay}ms, stroke .35s ease, opacity .35s ease`;
-      requestAnimationFrame(() => requestAnimationFrame(() => { path.style.strokeDashoffset = '0'; }));
-      revealAt(tr.tile, done - 200);
+      path.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }],
+        { duration: ms, delay: Math.max(0, wait), easing: 'cubic-bezier(.45,.05,.25,1)', fill: 'backwards' });
     }
 
     const end = el('circle', { cx: Math.round(ex), cy: Math.round(ey), r: 2.6, class: 'end' });
     const ring = el('circle', { cx: Math.round(ex), cy: Math.round(ey), r: 3, class: 'ring' });
-    if (animate) end.style.setProperty('--d', `${done - 80}ms`);
+    if (animate) end.style.setProperty('--d', `${Math.max(0, wait) + ms - 80}ms`);
     else end.style.animation = 'none';
     svg.append(ring, end);
 
@@ -158,10 +155,16 @@ function build() {
       comets.push({ y0: Math.min(...ys), y1: Math.max(...ys), path, len, tl, cycle, tile: tr.tile, tail, halo, head, ring, t: (cycle / count) * j + Math.random() * cycle * 0.3 });
     }
   }
-  for (const [x, y] of joints) svg.append(el('circle', { cx: Math.round(x), cy: Math.round(y), r: 3, class: 'jn' }));
+  // joints show when the bus that runs through them is drawn
+  for (const [x, y] of joints) {
+    const jn = el('circle', { cx: Math.round(x), cy: Math.round(y), r: 3, class: 'jn' });
+    const bus = traces.find((t) => t.pts.some(([px, py]) => Math.round(px) === Math.round(x) && Math.round(py) === Math.round(y))) ?? traces[0];
+    const wait = (bus?.delay ?? 0) - since;
+    if (!reduce.matches && wait > 0) jn.style.cssText = `opacity:0;transform-box:fill-box;transform-origin:center;animation:pop 300ms ease-out ${wait + 200}ms forwards`;
+    svg.append(jn);
+  }
 
-  if (animate) startAt = performance.now() + Math.max(...traces.map((t) => t.delay + (t.ms || DRAW_MS))) + 300;
-  first = false;
+  startAt = bootAt + Math.max(...traces.map((t) => t.delay + (t.ms || DRAW_MS))) + 300;
 }
 
 // A comet reaching its tile flashes the joint where the branch meets it.

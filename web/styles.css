@@ -55,40 +55,34 @@ svg{display:block;fill:none;stroke:currentColor}
   background:radial-gradient(closest-side,rgba(255,255,255,.12),transparent);animation:glow 6s 1.4s ease-in-out infinite}
 .logo i{position:absolute;display:block;background:var(--ink);will-change:transform}
 /* entrance: the triangle flies in from the left, the bars shoot in from the right, one by one */
+/* every 8 s, after the intro: the triangle nudges, the bars flash and slide, then the name ripples */
 .logo .tri{left:4%;width:57%;top:5.263%;height:89.474%;clip-path:polygon(0 50%,100% 0,100% 100%);
-  animation:triFly .75s .15s cubic-bezier(.2,.9,.25,1.25) both,nudge 6s 2.6s ease-in-out infinite}
+  animation:triFly .75s .15s cubic-bezier(.2,.9,.25,1.25) both,nudge 8s 6s ease-in-out infinite}
 .logo .bar{left:73%;width:23%;height:14.474%;transform-origin:left center;
-  animation:barShot .45s cubic-bezier(.2,.9,.3,1.35) both,charge 6s ease-in-out infinite,signal 6s ease-in-out infinite}
-.logo .b1{animation-delay:.55s,3s,3s;top:14.474%}
-.logo .b2{animation-delay:.68s,3.12s,3.12s;top:44.737%}
-.logo .b3{animation-delay:.81s,3.24s,3.24s;top:75%}
+  animation:barShot .45s cubic-bezier(.2,.9,.3,1.35) both,charge 8s ease-in-out infinite,signal 8s ease-in-out infinite}
+.logo .b1{animation-delay:.55s,6.1s,6.1s;top:14.474%}
+.logo .b2{animation-delay:.68s,6.22s,6.22s;top:44.737%}
+.logo .b3{animation-delay:.81s,6.34s,6.34s;top:75%}
 @keyframes triFly{0%{transform:translateX(-160%) scale(.6);opacity:0}60%{opacity:1}100%{transform:none;opacity:1}}
 @keyframes barShot{0%{transform:translateX(260%) scaleX(.4);opacity:0;background:var(--accent)}70%{background:#fff}100%{transform:none;opacity:1}}
-@keyframes charge{0%,58%,100%{box-shadow:none}64%{box-shadow:0 0 14px 2px rgba(217,119,87,.75)}72%{box-shadow:none}}
-/* the moment it locks: a shock wave and a burst of sparks; then a heartbeat every few seconds */
+@keyframes charge{0%,14%,100%{box-shadow:none}6%{box-shadow:0 0 14px 2px rgba(217,119,87,.75)}}
+/* the moment it locks: a shock wave and a burst of sparks, once */
 .burst{position:absolute;inset:0;pointer-events:none;z-index:1}
 .burst .ring{position:absolute;left:50%;top:50%;width:100%;aspect-ratio:1;border-radius:50%;border:1.5px solid rgba(217,119,87,.75);
   translate:-50% -50%;scale:.3;opacity:0;animation:shock 1.1s 1.05s cubic-bezier(.15,.7,.3,1) forwards}
 .burst .r2{border-color:rgba(255,255,255,.55);animation-delay:1.18s}
-.burst .beat{border-color:rgba(255,255,255,.22);animation:beat 5s 3s ease-out infinite}
 .burst .spark{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px 0 0 -2px;border-radius:50%;background:var(--c);
   box-shadow:0 0 8px var(--c);opacity:0;animation:spark .9s 1.05s cubic-bezier(.1,.75,.3,1) forwards}
 @keyframes shock{0%{scale:.3;opacity:.95}100%{scale:2.7;opacity:0}}
-@keyframes beat{0%{scale:.7;opacity:.6}35%{scale:2.1;opacity:0}100%{scale:2.1;opacity:0}}
 @keyframes spark{0%{opacity:1;transform:rotate(var(--a)) translateX(0) scale(1.2)}100%{opacity:0;transform:rotate(var(--a)) translateX(var(--d)) scale(.3)}}
-/* a comet keeps circling the mark */
-.orbit-wrap{position:absolute;left:50%;top:50%;width:190%;aspect-ratio:1;translate:-50% -50%;transform:rotate(-14deg) scaleY(.42);pointer-events:none;z-index:3}
-.orbit{position:absolute;inset:0;border-radius:50%;opacity:0;animation:orbitIn .6s 1.6s ease-out forwards,orbit 6.5s 1.6s linear infinite}
-.orbit i{position:absolute;left:50%;top:-3px;width:6px;height:6px;margin-left:-3px;border-radius:50%;background:#fff;
-  box-shadow:0 0 10px 2px rgba(255,255,255,.7),-14px 0 10px -2px rgba(217,119,87,.55),-26px 0 12px -4px rgba(217,119,87,.3)}
-@keyframes orbit{to{transform:rotate(360deg)}}
-@keyframes orbitIn{to{opacity:1}}
-@keyframes nudge{0%,64%,100%{transform:none}70%{transform:translateX(-7%)}78%{transform:none}}
-@keyframes signal{0%,60%,100%{transform:none}66%{transform:translateX(14%)}74%{transform:none}}
+@keyframes nudge{0%,12%,100%{transform:none}5%{transform:translateX(-7%)}}
+@keyframes signal{0%,14%,100%{transform:none}6%{transform:translateX(14%)}}
 @keyframes glow{0%,100%{opacity:.5}50%{opacity:1}}
 
 .word{text-align:center;margin-top:16px}
-.word h1 span{display:inline-block;animation:drop .55s cubic-bezier(.2,.9,.3,1.4) both;animation-delay:calc(1.15s + var(--k) * 55ms)}
+.word h1 span{display:inline-block;animation:drop .55s cubic-bezier(.2,.9,.3,1.4) both,ripple 8s ease-in-out infinite;
+  animation-delay:calc(1.15s + var(--k) * 55ms),calc(6.45s + var(--k) * 55ms)}
+@keyframes ripple{0%,10%,100%{transform:none;color:var(--ink)}4%{transform:translateY(-7px) scale(1.06);color:var(--accent)}}
 @keyframes drop{0%{opacity:0;transform:translateY(-16px) scale(.7);color:var(--accent)}55%{color:var(--accent)}100%{opacity:1;transform:none;color:var(--ink)}}
 .word .tag{animation:wordIn .8s 1.8s cubic-bezier(.2,.7,.3,1) both}
 .word h1{font-size:15px;letter-spacing:.26em;color:var(--ink);font-weight:500;padding-left:.26em}
@@ -103,7 +97,7 @@ svg{display:block;fill:none;stroke:currentColor}
 .tile{border:1px solid var(--line);border-radius:12px;background:var(--tile);padding:26px 16px 13px;min-width:0;
   display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;
   position:relative;overflow:hidden;width:100%;
-  animation:rise .6s cubic-bezier(.2,.7,.3,1) both;animation-delay:calc(1900ms + var(--i) * 140ms);
+  animation:rise .6s cubic-bezier(.2,.7,.3,1) both;animation-delay:calc(1500ms + var(--i) * 150ms);
   transition:border-color .3s ease,background .3s ease,transform .3s ease,box-shadow .3s ease}
 .tile::before{content:"";position:absolute;left:18%;right:18%;top:0;height:1px;pointer-events:none;
   background:linear-gradient(90deg,transparent,rgba(217,119,87,.7),transparent);opacity:0;transition:opacity .3s ease}
