@@ -12,7 +12,7 @@ const desktop = matchMedia('(min-width: 1024px)');
 const DRAW_START = 650;   // ms after load, once the mark has settled
 const DRAW_MS = 750;
 const LOWER_DELAY = 300;  // the lower row starts after the side wires
-const LINK_MS = 320;      // mobile: each short link between tiles
+const LINK_MS = 520;      // phones: each link from one row of tiles to the next
 const TAIL = 34;          // comet tail length in px
 const SPEED = 0.085;      // px per ms
 const HOT_SPEED = 0.26;
@@ -70,21 +70,36 @@ function desktopTraces() {
   return { traces, joints: joints.slice(0, 1) };
 }
 
-// Mobile: a stem from the name to the first tile, then a link from each tile to the next;
-// each link draws once the tile above it is in.
-function mobileTraces() {
+// Phones and portrait: a stem from the name to the first row, a bus from a single tile to the two
+// under it, and a straight link from each tile to the one below; each row draws once the one above is in.
+function gridTraces() {
   const w = box(word);
   const c = box(core);
-  const col = [...tiles].sort((a, b) => box(a).t - box(b).t);
-  const traces = [{ tile: col[0], pts: [[c.cx, w.b + 14], [c.cx, box(col[0]).t]], delay: DRAW_START }];
-  const joints = [];
-  let at = DRAW_START + DRAW_MS - 100;
-  for (let i = 1; i < col.length; i++) {
-    const a = box(col[i - 1]), b = box(col[i]);
-    traces.push({ tile: col[i], pts: [[b.cx, a.b], [b.cx, b.t]], delay: at, ms: LINK_MS });
-    joints.push([b.cx, a.b]);
-    at += LINK_MS - 60;
+  const rows = [];
+  for (const t of [...tiles].sort((a, b) => box(a).t - box(b).t || box(a).l - box(b).l)) {
+    const b = box(t);
+    const row = rows.find((r) => Math.abs(r.t - b.t) < 8);
+    row ? row.tiles.push(t) : rows.push({ t: b.t, tiles: [t] });
   }
+  const traces = [];
+  const joints = [];
+  let at = DRAW_START;
+  rows.forEach((row, i) => {
+    const ms = i === 0 ? DRAW_MS : LINK_MS;
+    for (const t of row.tiles) {
+      const n = box(t);
+      if (i === 0) { traces.push({ tile: t, pts: [[c.cx, w.b + 12], [c.cx, n.t]], delay: at, ms }); continue; }
+      const above = rows[i - 1].tiles.map(box);
+      const from = above.length === 1 ? above[0] : above.reduce((a, b) => (Math.abs(b.cx - n.cx) < Math.abs(a.cx - n.cx) ? b : a));
+      if (Math.abs(from.cx - n.cx) < 2) traces.push({ tile: t, pts: [[n.cx, from.b], [n.cx, n.t]], delay: at, ms });
+      else {
+        const bus = from.b + (n.t - from.b) / 2;
+        traces.push({ tile: t, pts: [[from.cx, from.b], [from.cx, bus], [n.cx, bus], [n.cx, n.t]], delay: at, ms });
+        if (!joints.length || joints.at(-1)[1] !== bus) joints.push([from.cx, bus]);
+      }
+    }
+    at += ms - 80;
+  });
   return { traces, joints };
 }
 
@@ -99,17 +114,10 @@ function revealAt(tile, ms) {
   tile.style.animationDelay = `${Math.round(ms)}ms, 0s, 0s`;
 }
 
-// Mobile sizes the tiles so the first screen holds the mark and the first rows (see .fan --rows).
-function measureAbove() {
-  if (desktop.matches) return;
-  const above = map.getBoundingClientRect().top + scrollY + box(tiles[0]).t;
-  document.documentElement.style.setProperty('--above', `${Math.round(above)}px`);
-}
 
 function build() {
   const animate = first && !reduce.matches;
-  measureAbove();
-  const { traces, joints } = desktop.matches ? desktopTraces() : mobileTraces();
+  const { traces, joints } = desktop.matches ? desktopTraces() : gridTraces();
   svg.replaceChildren();
   comets = [];
   owner.clear();
@@ -128,7 +136,7 @@ function build() {
       path.style.strokeDashoffset = `${len}`;
       path.style.transition = `stroke-dashoffset ${ms}ms cubic-bezier(.45,.05,.25,1) ${tr.delay}ms, stroke .35s ease, opacity .35s ease`;
       requestAnimationFrame(() => requestAnimationFrame(() => { path.style.strokeDashoffset = '0'; }));
-      revealAt(tr.tile, box(tr.tile).t + map.getBoundingClientRect().top > innerHeight ? -1000 : done - 200);
+      revealAt(tr.tile, done - 200);
     }
 
     const end = el('circle', { cx: Math.round(ex), cy: Math.round(ey), r: 2.6, class: 'end' });
@@ -207,17 +215,6 @@ const io = new IntersectionObserver((entries) => {
 });
 for (const t of tiles) io.observe(t);
 
-// Mobile without scroll timelines: tiles below the first screen glide in once a fifth of them shows.
-if (!CSS.supports('animation-timeline: view()') && !reduce.matches) {
-  const glide = new IntersectionObserver((entries) => {
-    for (const e of entries) {
-      if (desktop.matches) { e.target.classList.remove('away'); continue; }
-      e.target.classList.add('glide');
-      e.target.classList.toggle('away', !e.isIntersecting);
-    }
-  }, { threshold: 0.2 });
-  for (const t of tiles) glide.observe(t);
-}
 
 // The dots light up around the pointer or finger, and drift a little with the mouse.
 let spotTimer = 0;

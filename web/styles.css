@@ -17,8 +17,10 @@ svg{display:block;fill:none;stroke:currentColor}
 .brand b{font-weight:600}
 .brand-mark{width:22px;height:auto;aspect-ratio:20/15.2;fill:var(--ink);stroke:none}
 
-/* ===== MOBILE: logo on top, tiles one under another ===== */
-.map{flex:1;position:relative;isolation:isolate;overflow:hidden;overflow:clip;display:flex;flex-direction:column;align-items:center;padding:26px 16px 16px}
+/* ===== MOBILE and portrait: one screen — the mark, VPS across, then two rows of two ===== */
+.map{flex:1;position:relative;isolation:isolate;overflow:hidden;overflow:clip;display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-rows:auto auto minmax(118px,1fr) minmax(118px,1fr);
+  grid-template-areas:"hub hub" "vps vps" "term agents" "files studio";column-gap:12px;row-gap:22px;padding:16px 14px 14px}
 .map::before,.map::after{content:"";position:absolute;inset:0;z-index:-2;pointer-events:none;
   background-size:22px 22px;translate:calc(var(--mx,0) * -10px) calc(var(--my,0) * -10px);transition:translate .6s ease-out}
 .map::before{background-image:radial-gradient(circle,#2a2a2a 1.1px,transparent 1.5px);
@@ -45,7 +47,7 @@ svg{display:block;fill:none;stroke:currentColor}
 @keyframes pop{from{opacity:0;transform:scale(.2)}to{opacity:1;transform:scale(1)}}
 
 /* ----- the mark: just the logo ----- */
-.hub{display:flex;flex-direction:column;align-items:center;position:relative}
+.hub{grid-area:hub;display:flex;flex-direction:column;align-items:center;position:relative;padding-bottom:4px}
 .core{position:relative;display:grid;place-items:center;isolation:isolate}
 .logo{position:relative;display:block;width:72px;aspect-ratio:20/15.2;animation:logoIn .9s .1s cubic-bezier(.2,.8,.3,1) both}
 /* the glow is its own layer behind the mark, never a filter on it */
@@ -71,9 +73,9 @@ svg{display:block;fill:none;stroke:currentColor}
 @keyframes wordIn{from{opacity:0;letter-spacing:.5em;filter:blur(3px)}to{opacity:1;filter:none}}
 
 /* ----- tiles: centered, a drawing on top ----- */
-.fan{--rows:3;--gap:26px;display:flex;flex-direction:column;gap:var(--gap);width:100%;padding-top:44px}
-.tile{border:1px solid var(--line);border-radius:12px;background:var(--tile);padding:26px 16px 13px;
-  min-height:calc((100svh - var(--above,260px) - 16px - (var(--rows) - 1) * var(--gap)) / var(--rows));
+.fan{display:contents}
+.t-vps{grid-area:vps}.t-term{grid-area:term}.t-agents{grid-area:agents}.t-files{grid-area:files}.t-studio{grid-area:studio}
+.tile{border:1px solid var(--line);border-radius:12px;background:var(--tile);padding:26px 16px 13px;min-width:0;
   display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;
   position:relative;overflow:hidden;width:100%;
   animation:rise .6s cubic-bezier(.2,.7,.3,1) both;animation-delay:calc(900ms + var(--i) * 90ms);
@@ -197,34 +199,49 @@ svg{display:block;fill:none;stroke:currentColor}
 .bottom a{color:var(--muted);word-break:break-all;transition:color .2s}
 .bottom a:hover{color:var(--ink)}
 
-/* ----- mobile scroll: tiles glide in from alternating sides and leave the same way ----- */
-@media (max-width:1023px) and (prefers-reduced-motion:no-preference){
-  .fan .tile{--side:-1}
-  .fan .tile:nth-child(even){--side:1}
-  @supports (animation-timeline:view()){
-    .fan .tile{animation:rise .6s cubic-bezier(.2,.7,.3,1) both,glideIn linear both,glideOut linear forwards;
-      animation-timeline:auto,view(),view();animation-range:normal,entry 0% entry 100%,exit 0% exit 100%}
-  }
-  /* no scroll timeline: hub.js toggles .away until the tile is on screen */
-  .fan .tile.away{translate:calc(var(--side) * 115%) 0;rotate:calc(var(--side) * 6deg)}
-  .fan .tile.glide{transition:translate .7s cubic-bezier(.2,.7,.3,1),rotate .7s cubic-bezier(.2,.7,.3,1),
-    border-color .3s ease,background .3s ease,transform .3s ease,box-shadow .3s ease}
+/* half tiles on phones: a smaller drawing, the name, one line of description; tags give way */
+@media (max-width:1023px){
+  .t-term,.t-agents,.t-files,.t-studio{padding:26px 10px 12px;gap:6px}
+  .t-term .art,.t-agents .art,.t-files .art,.t-studio .art{height:30px}
+  .t-term .nhead,.t-agents .nhead,.t-files .nhead,.t-studio .nhead{font-size:11px;letter-spacing:.12em}
+  .t-term .desc,.t-agents .desc,.t-files .desc,.t-studio .desc{font-size:10px;line-height:1.4}
+  .t-agents .tags,.t-files .tags,.t-studio .tags{display:none}
+  .t-term .runtimes{gap:8px}
+  .t-term .rt{font-size:0;gap:0}
+  .t-term .rt svg{width:15px;height:15px;flex-basis:15px}
+  .t-term .badge,.t-agents .badge,.t-files .badge,.t-studio .badge{top:7px;right:7px;font-size:7.5px;padding:2px 6px;letter-spacing:.1em}
+  .bottom{flex-direction:row;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;font-size:8.5px}
+  .bottom a{word-break:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 }
-@keyframes glideIn{from{translate:calc(var(--side) * 115%) 0;rotate:calc(var(--side) * 6deg)}
-  70%{translate:calc(var(--side) * -2%) 0;rotate:0deg}to{translate:0 0;rotate:0deg}}
-@keyframes glideOut{from{translate:0 0;rotate:0deg}to{translate:calc(var(--side) * -115%) 0;rotate:calc(var(--side) * -6deg)}}
+
+/* short phones: the same one screen, tighter */
+@media (max-width:639px) and (max-height:720px){
+  .map{row-gap:16px;padding:10px 12px 10px;grid-template-rows:auto auto minmax(104px,1fr) minmax(104px,1fr)}
+  .logo{width:52px}
+  .word{margin-top:9px}
+  .word h1{font-size:13px}
+  .word .tag{margin-top:6px;font-size:8px}
+  .t-vps{padding:20px 14px 10px;gap:6px}
+  .t-vps .art{height:30px}
+  .t-term,.t-agents,.t-files,.t-studio{padding:20px 8px 9px;gap:5px}
+  .t-term .art,.t-agents .art,.t-files .art,.t-studio .art{height:24px}
+  .t-term .desc,.t-agents .desc,.t-files .desc,.t-studio .desc{font-size:9.5px}
+}
 
 /* ===== WIDE PORTRAIT (640–1023): bigger type, tiles fill the screen ===== */
 @media (min-width:640px) and (max-width:1023px){
   .top{padding:15px 30px}
-  .map{padding:40px 30px 16px}
+  .map{padding:32px 30px 24px;column-gap:20px;row-gap:36px;grid-template-rows:auto auto minmax(180px,1fr) minmax(180px,1fr)}
   .logo{width:120px}
   .word{margin-top:22px}
   .word h1{font-size:21px;letter-spacing:.32em;padding-left:.32em}
   .word .tag{font-size:10.5px;margin-top:11px}
-  .fan{--gap:30px;padding-top:56px}
   .tile{padding:44px 30px 26px;gap:12px;border-radius:14px}
-  .art{height:72px;margin-bottom:6px}
+  .art,.t-term .art,.t-agents .art,.t-files .art,.t-studio .art{height:64px;margin-bottom:6px}
+  .t-term .nhead,.t-agents .nhead,.t-files .nhead,.t-studio .nhead{font-size:14px}
+  .t-term .desc,.t-agents .desc,.t-files .desc,.t-studio .desc{font-size:12.5px}
+  .t-agents .tags,.t-files .tags,.t-studio .tags{display:flex}
+  .t-term .rt{font-size:12px;gap:6px}
   .nhead{font-size:15px}
   .desc{font-size:13.5px}
   .tags{gap:8px}
@@ -234,27 +251,22 @@ svg{display:block;fill:none;stroke:currentColor}
   .rt svg{width:17px;height:17px;flex-basis:17px}
   .bottom{flex-direction:row;justify-content:space-between;align-items:center;padding:14px 30px}
 }
-@media (min-width:640px) and (max-width:1023px) and (min-height:1200px){
-  .fan{--rows:5}
-}
 
 /* ===== DESKTOP (>=1024): VPS | logo | Terminal on top, three tiles below ===== */
 @media (min-width:1024px){
   body{height:100dvh}
   .top{padding:15px 30px;font-size:11.5px}
-  .map{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-areas:"vps hub term" "agents files studio";
+  .map{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:none;grid-template-areas:"vps hub term" "agents files studio";
     align-content:center;column-gap:clamp(20px,2.2vw,36px);row-gap:clamp(88px,12vh,140px);
     padding:clamp(24px,4vh,48px) max(clamp(28px,3.5vw,64px),calc((100% - 1400px) / 2))}
   .map::before{-webkit-mask-image:radial-gradient(60% 65% at 50% 46%,#000,rgba(0,0,0,.25) 70%,transparent);
                mask-image:radial-gradient(60% 65% at 50% 46%,#000,rgba(0,0,0,.25) 70%,transparent)}
-  .fan{display:contents}
-  .hub{grid-area:hub;align-self:center;justify-self:center}
+  .hub{grid-area:hub;align-self:center;justify-self:center;padding-bottom:0}
   .logo{width:clamp(110px,13vmin,156px)}
   .word{position:absolute;top:100%;left:50%;translate:-50% 0;white-space:nowrap;margin-top:clamp(16px,2.6vh,26px)}
   .word h1{font-size:clamp(18px,2.2vmin,24px);letter-spacing:.32em;padding-left:.32em}
   .word .tag{font-size:10px;margin-top:10px}
 
-  .t-vps{grid-area:vps}.t-term{grid-area:term}.t-agents{grid-area:agents}.t-files{grid-area:files}.t-studio{grid-area:studio}
   .tile{min-height:clamp(230px,30vh,300px);padding:clamp(40px,4.4vh,48px) clamp(22px,2vw,30px) clamp(26px,3.2vh,34px);
     gap:clamp(8px,1.3vh,12px);border-radius:14px}
   .art{height:clamp(52px,7.6vh,80px);margin-bottom:clamp(2px,.8vh,8px)}
