@@ -11,7 +11,7 @@
 - [x] smoke tests + CI on Node 20/22
 - [ ] SQLite bootstrap, owner account
 
-## 0.3.0 — terminal and chat (brief: `docs/BRIEF-terminal-chat.md`)
+## 0.3.0 — terminal and chat
 - [x] read-only terminal: exact command allowlist, SSE stream, Ubuntu-like prompt, owner token
 - [x] workspace: rail + panel + window (rail fixed on phones, panel slides over)
 - [x] agent scanner (Claude Code, Codex, OpenClaw, DeepSeek Harness) — PATH, running systemd units, install folders

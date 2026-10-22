@@ -45,10 +45,15 @@ files and servers are still design, see [docs/ROADMAP.md](docs/ROADMAP.md).
 ## Repository layout
 
 ```
-web/          static shell (no dependencies, opens in a browser)
-docs/         architecture, roadmap, decisions
-PROJECT_STATE.md  current state of work
+bin/          the `spectrahub` command: init, serve, service, login, doctor
+src/          server: agents, sessions, terminal, usage — no dependencies
+web/          the app in the browser: start screen, chat, terminal, settings
+test/         `npm test`
+docs/         install, architecture, roadmap, decisions
 ```
+
+The repository holds the product only. Everything SpectraHub learns about a server — its agents,
+sign-ins, sessions, files and settings — stays on that server, in `~/.spectrahub`.
 
 ## License
 
