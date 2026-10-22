@@ -1,15 +1,17 @@
 // Minimal HTTP server: static shell + health endpoints. No dependencies.
 import { createServer as httpCreateServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, statfs } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { existsSync } from 'node:fs';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
+import { cpus, freemem, homedir, hostname, loadavg, release, totalmem, type as osType, uptime } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { VERSION, paths, defaultDir, readConfig, writeConfig } from './config.js';
 import { authCookie, authorize, cookieToken, createPairing, redeemPairing, runLine, terminalInfo } from './terminal.js';
 import { models, scan } from './agents.js';
+import { sessionUsage } from './usage.js';
 import {
-  attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, runs, saveUpload,
+  attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, recentFiles, runs, saveUpload,
   send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession,
 } from './sessions.js';
 
@@ -161,6 +163,9 @@ async function terminalRoute(req, res, url, config) {
     return json(200, { models: await models({ fresh: url.searchParams.has('fresh') }) });
   }
   if (url.pathname === '/api/runs' && req.method === 'GET') return json(200, { runs: runs({ ...config, dir }) });
+  if (url.pathname === '/api/files/recent' && req.method === 'GET') return json(200, { files: recentFiles({ ...config, dir }) });
+  if (url.pathname === '/api/system' && req.method === 'GET') return json(200, await systemInfo(config));
+  if (url.pathname === '/api/fs/dirs' && req.method === 'GET') return json(200, await listDirs(url.searchParams.get('path')));
   if (url.pathname === '/api/settings' && req.method === 'PATCH') {
     let b = {};
     try { b = JSON.parse(await readBody(req)); } catch { return send(res, 400, 'bad request'); }
@@ -193,6 +198,27 @@ async function terminalRoute(req, res, url, config) {
   return send(res, 404, 'not found');
 }
 
+// This server, measured now: the VPS home shows it.
+async function systemInfo(config) {
+  let disk = null;
+  try { const f = await statfs('/'); disk = { total: f.blocks * f.bsize, free: f.bavail * f.bsize }; } catch { /* not supported */ }
+  let os = null;
+  try { os = /^PRETTY_NAME="?([^"\n]+)"?/m.exec(await readFile('/etc/os-release', 'utf8'))?.[1] ?? null; } catch { /* not linux */ }
+  return {
+    host: hostname(), os: os ?? `${osType()} ${release()}`, uptime: Math.round(uptime()), load: loadavg().map((x) => Math.round(x * 100) / 100),
+    cpus: cpus().length, memory: { total: totalmem(), free: freemem() }, disk, version: VERSION, at: new Date().toISOString(),
+  };
+}
+
+// Folders under a path, for choosing where agents work. Directories only, nothing is read.
+async function listDirs(path) {
+  const base = path && isAbsolute(path) ? normalize(path) : homedir();
+  let entries = [];
+  try { entries = await readdir(base, { withFileTypes: true }); } catch { return { path: base, parent: dirname(base), dirs: [], error: 'nie można otworzyć' }; }
+  const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name).sort((a, b) => a.localeCompare(b)).slice(0, 300);
+  return { path: base, parent: base === '/' ? null : dirname(base), dirs, home: homedir() };
+}
+
 // Folders for sessions.
 async function projectRoute(req, res, url, config, json) {
   const id = url.pathname.split('/').filter(Boolean)[2];
@@ -222,6 +248,7 @@ async function sessionRoute(req, res, url, config, json) {
   const s = getSession(config, id);
   if (!s) return json(404, { error: 'no such session' });
   if (!action && req.method === 'GET') return json(200, { session: s });
+  if (action === 'usage' && req.method === 'GET') return json(200, await sessionUsage(s));
   if (!action && req.method === 'PATCH') { const r = updateSession(config, id, (await body()) ?? {}); return r.error ? json(r.code ?? 400, r) : json(200, r); }
   if (!action && req.method === 'DELETE') { const r = deleteSession(config, id); return r.error ? json(r.code ?? 400, r) : json(200, r); }
   if (action === 'attach' && req.method === 'POST') {
@@ -295,7 +322,7 @@ export function createServer(config) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
     }
-    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
+    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|fs\/dirs$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
     return serveStatic(res, url.pathname);
   });

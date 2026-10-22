@@ -76,7 +76,7 @@ function fromUnit(show, pkg) {
 }
 
 // KEY=value lines; values never leave the server, they only reach the agent's own process.
-function readEnvFile(file) {
+export function readEnvFile(file) {
   const env = {};
   try {
     for (const line of readFileSync(file, 'utf8').split('\n')) {
@@ -296,15 +296,27 @@ function toolStep(id, name, input) {
 
 const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((x) => x.text ?? '').join('') : c == null ? '' : JSON.stringify(c));
 
+// Three permission levels per agent, mapped onto what each runtime itself offers:
+//   read  — reads and answers, changes nothing
+//   write — may change files in the session's working folder, no shell for Claude
+//   full  — everything the runtime can do (the owner's default)
+export const PERMS = ['read', 'write', 'full'];
+const CLAUDE_TOOLS = {
+  read: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'TodoWrite'],
+  write: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'WebFetch', 'WebSearch', 'TodoWrite'],
+  full: ['Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'TodoWrite'],
+};
+
 // Claude Code: text deltas, every tool call with its result, thinking, todo list and cost.
 // SpectraHub only opens a window to the agent: its own settings, instructions and hooks apply.
 const claude = {
   argv(ref, started, o = {}) {
+    const perm = PERMS.includes(o.perm) ? o.perm : 'full';
     return ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-      '--permission-mode', 'acceptEdits',
+      '--permission-mode', perm === 'read' ? 'default' : 'acceptEdits',
       ...(o.model ? ['--model', o.model] : []), ...(o.effort ? ['--effort', o.effort] : []),
       ...(started ? ['--resume', ref] : ['--session-id', ref]),
-      '--allowedTools', 'Bash', 'Edit', 'Write', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'TodoWrite'];
+      '--allowedTools', ...CLAUDE_TOOLS[perm]];
   },
   stdin: true,
   line(d, emit) {
@@ -353,7 +365,7 @@ function unwrap(command) {
 
 // Codex keeps plan limits in its own session files (~/.codex/sessions/…/rollout-*-<thread>.jsonl).
 const rollouts = new Map();  // thread id -> file
-function findRollout(thread) {
+export function codexRollout(thread) {
   if (rollouts.has(thread)) return rollouts.get(thread);
   const root = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions');
   const walk = (dir, depth) => {
@@ -371,7 +383,7 @@ function findRollout(thread) {
   return f;
 }
 export function codexLimits(thread) {
-  const f = thread && findRollout(thread);
+  const f = thread && codexRollout(thread);
   if (!f) return null;
   let last = null;
   try {
@@ -388,7 +400,10 @@ export function codexLimits(thread) {
 const codex = {
   argv(ref, started, o = {}) {
     const images = (o.images ?? []).flatMap((f) => ['-i', f]);  // before the other flags: -i takes several values
-    const common = [...images, '--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check',
+    const perm = PERMS.includes(o.perm) ? o.perm : 'full';
+    const sandbox = perm === 'full' ? ['--dangerously-bypass-approvals-and-sandbox']
+      : ['-c', `sandbox_mode="${perm === 'read' ? 'read-only' : 'workspace-write'}"`, '-c', 'approval_policy="never"'];
+    const common = [...images, '--json', ...sandbox, '--skip-git-repo-check',
       ...(o.model ? ['-m', o.model] : []), ...(o.effort ? ['-c', `model_reasoning_effort="${o.effort}"`] : [])];
     return started ? ['exec', 'resume', ...common, ref, '-'] : ['exec', ...common, '-'];
   },
@@ -412,8 +427,7 @@ const codex = {
       else if (d.type === 'item.completed') emit({ type: 'step-end', id: it.id, ok: it.status !== 'failed', output: clip(textOf(it.result?.content ?? it.result ?? '')) });
     } else if (d.type === 'error' || d.type === 'turn.failed') emit({ type: 'error', s: String(d.message ?? d.error?.message ?? 'error') });
     else if (d.type === 'turn.completed') {
-      emit({ type: 'usage', input: d.usage?.input_tokens ?? 0, output: (d.usage?.output_tokens ?? 0) + (d.usage?.reasoning_output_tokens ?? 0),
-        context: (d.usage?.input_tokens ?? 0) + (d.usage?.output_tokens ?? 0) });
+      emit({ type: 'usage', input: d.usage?.input_tokens ?? 0, output: (d.usage?.output_tokens ?? 0) + (d.usage?.reasoning_output_tokens ?? 0) });
       emit({ type: 'limits-codex' });  // read from the rollout file once the turn is written
       emit({ type: 'done' });
     }
@@ -502,7 +516,7 @@ export function newRef(id) {
 }
 
 // Runs one turn. `emit` receives {type: text|step|step-end|usage|limits|error|ref|done}; the returned function stops it.
-export function turn(rt, { ref, started, prompt, cwd, model, effort, images, env: extra = {} }, emit) {
+export function turn(rt, { ref, started, prompt, cwd, model, effort, images, perm, ownCwd = false, env: extra = {} }, emit) {
   const a = Object.create(ADAPTERS[rt.id]);  // per-run state (e.g. dsh: did text already stream)
   let file = null;
   if (rt.id === 'openclaw') {
@@ -513,10 +527,11 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, env
   }
   const l = rt.launch;
   const env = { ...process.env, ...(l?.envFile ? readEnvFile(l.envFile) : {}), ...(l?.env ?? {}), ...extra, NO_COLOR: '1' };
-  const opts = { agent: rt.agent, file, model, effort, images };
+  if (rt.id === 'dsh') env.DSH_PERMISSION_MODE = { read: 'read-only', write: 'workspace-write', full: 'danger-full-access' }[perm] ?? 'workspace-write';
+  const opts = { agent: rt.agent, file, model, effort, images, perm };
   const [bin, args] = l ? [l.node, [l.script, ...a.argv(ref, started, opts)]] : [rt.path, a.argv(ref, started, opts)];
   const child = spawn(bin, args, {
-    cwd: l?.cwd ?? cwd, env, stdio: [a.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    cwd: ownCwd ? cwd : l?.cwd ?? cwd, env, stdio: [a.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
   if (a.stdin) child.stdin.end(prompt);
 

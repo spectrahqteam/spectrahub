@@ -182,7 +182,7 @@ test('adapters turn each runtime events into the same steps', async () => {
   assert.equal(cx.splice(2, 1)[0].title, 'uptime', 'unquoted shell wrapper is removed too');
   assert.deepEqual(cx[0], { type: 'step', id: 'i1', kind: 'tool', name: 'bash', title: 'echo hi && ls' });
   assert.deepEqual(cx[1], { type: 'step-end', id: 'i1', ok: false, exit: 2, output: 'hi\n' });
-  assert.deepEqual(cx[2], { type: 'usage', input: 5, output: 2, context: 6 });
+  assert.deepEqual(cx[2], { type: 'usage', input: 5, output: 2 }, 'the context comes from Codex session file, not the turn total');
   // DeepSeek Harness: thinking, tool call and result joined by callId, tokens per step
   const ds = run('dsh', [
     { type: 'thinking', text: 'plan' },

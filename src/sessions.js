@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, normalize } from 'node:path';
-import { codexLimits, scan, turn, newRef } from './agents.js';
+import { codexLimits, PERMS, scan, turn, newRef } from './agents.js';
 
 const CONTEXT_CHARS = 8000;
 const sessions = new Map();     // id -> session (loaded lazily)
@@ -119,6 +119,13 @@ export function updateSession(config, id, patch) {
     if (patch.projectId && !listProjects(config).some((p) => p.id === patch.projectId)) return { error: 'no such project', code: 400 };
     s.projectId = patch.projectId || null;
   }
+  if ('cwd' in patch) {
+    const dir = validDir(patch.cwd);
+    if (!dir) return { error: 'not a directory on this server', code: 400 };
+    s.cwd = dir;
+    s.cwdChosen = true;
+  }
+  for (const [agent, perm] of Object.entries(patch.perms ?? {})) if (s.agents[agent] && PERMS.includes(perm)) s.agents[agent].perm = perm;
   for (const [agent, m] of Object.entries(patch.models ?? {})) {
     if (!s.agents[agent]) continue;
     s.agents[agent].model = typeof m.model === 'string' ? m.model.slice(0, 120) : s.agents[agent].model;
@@ -130,8 +137,8 @@ export function updateSession(config, id, patch) {
 }
 
 function summary(s) {
-  return { id: s.id, title: s.title, pinned: Boolean(s.pinned), projectId: s.projectId ?? null,
-    agents: Object.fromEntries(Object.entries(s.agents).map(([k, a]) => [k, { model: a.model ?? '', effort: a.effort ?? '', state: a.state }])) };
+  return { id: s.id, title: s.title, pinned: Boolean(s.pinned), projectId: s.projectId ?? null, cwd: s.cwd,
+    agents: Object.fromEntries(Object.entries(s.agents).map(([k, a]) => [k, { model: a.model ?? '', effort: a.effort ?? '', perm: a.perm ?? 'full', state: a.state }])) };
 }
 
 // Deleting moves the session to data/sessions/trash, so it can be brought back by hand.
@@ -249,6 +256,16 @@ export function sessionFile(config, id, fileId) {
   return { file: { ...f, size: st.size }, path: f.path };
 }
 
+// The newest files across sessions, for the Files home.
+export function recentFiles(config, limit = 12) {
+  const all = [];
+  for (const sum of listSessions(config)) {
+    const s = load(config, sum.id);
+    for (const f of s.files ?? []) all.push({ session: s.id, title: s.title, file: f });
+  }
+  return all.sort((a, b) => String(b.file.at).localeCompare(String(a.file.at))).slice(0, limit);
+}
+
 // Every running turn on this server, for the "background tasks" view.
 export function runs(config) {
   return [...running.keys()].map((key) => {
@@ -262,7 +279,13 @@ export function getSession(config, id) {
   return load(config, id);
 }
 
-export async function createSession(config, { agents, title }) {
+// A working folder must be an existing directory given by its absolute path.
+function validDir(path) {
+  if (typeof path !== 'string' || !isAbsolute(path)) return null;
+  try { return statSync(path).isDirectory() ? normalize(path) : null; } catch { return null; }
+}
+
+export async function createSession(config, { agents, title, cwd, perms = {} }) {
   const ready = (await scan()).filter((r) => r.ready);
   const picked = [...new Set(agents)].filter((id) => ready.some((r) => r.id === id));
   if (!picked.length) return { error: 'no ready agent selected' };
@@ -273,8 +296,9 @@ export async function createSession(config, { agents, title }) {
     autoTitle: !String(title || '').trim(),
     createdAt: now,
     updatedAt: now,
-    cwd: config.agents?.cwd ?? config.terminal?.cwd ?? process.cwd(),
-    agents: Object.fromEntries(picked.map((id) => [id, { ref: newRef(id), started: false, synced: now, state: 'idle' }])),
+    cwd: validDir(cwd) ?? config.agents?.cwd ?? config.terminal?.cwd ?? process.cwd(),
+    cwdChosen: Boolean(validDir(cwd)),
+    agents: Object.fromEntries(picked.map((id) => [id, { ref: newRef(id), started: false, synced: now, state: 'idle', perm: PERMS.includes(perms[id]) ? perms[id] : 'full' }])),
     log: [{ n: 0, who: 'system', s: `sesja otwarta · agenci: ${picked.join(', ')}`, at: now }],
   };
   sessions.set(s.id, s);
@@ -349,7 +373,8 @@ export async function send(config, id, { to, text, attachments = [] }) {
     const images = files.filter((f) => f.type.startsWith('image/')).map((f) => f.path);
     const hint = st.started ? '' : '\n\n(SpectraHub: jeśli przygotujesz plik dla użytkownika, podaj w odpowiedzi jego pełną ścieżkę — pojawi się w czacie jako plik do otwarcia.)';
     const env = { SPECTRAHUB_SESSION: s.id, SPECTRAHUB_AGENT: agent, SPECTRAHUB_HOME: config.dir };
-    const stop = turn(rt, { ref: st.ref, started: st.started, prompt: prompt + hint, cwd: s.cwd, model: st.model || null, effort: st.effort || null, images, env }, (e) => {
+    const stop = turn(rt, { ref: st.ref, started: st.started, prompt: prompt + hint, cwd: s.cwd, ownCwd: Boolean(s.cwdChosen),
+      model: st.model || null, effort: st.effort || null, perm: st.perm ?? 'full', images, env }, (e) => {
       if (e.type === 'text') {
         const last = reply.items.at(-1);
         const s1 = last?.k === 'text' && e.block && last.s && !last.s.endsWith('\n') ? '\n' + e.s : e.s;
