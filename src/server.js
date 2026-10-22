@@ -5,11 +5,11 @@ import { createReadStream } from 'node:fs';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { VERSION, paths, defaultDir } from './config.js';
+import { VERSION, paths, defaultDir, readConfig, writeConfig } from './config.js';
 import { authCookie, authorize, cookieToken, createPairing, redeemPairing, runLine, terminalInfo } from './terminal.js';
 import { models, scan } from './agents.js';
 import {
-  createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, runs, saveUpload,
+  attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, runs, saveUpload,
   send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession,
 } from './sessions.js';
 
@@ -161,6 +161,16 @@ async function terminalRoute(req, res, url, config) {
     return json(200, { models: await models({ fresh: url.searchParams.has('fresh') }) });
   }
   if (url.pathname === '/api/runs' && req.method === 'GET') return json(200, { runs: runs({ ...config, dir }) });
+  if (url.pathname === '/api/settings' && req.method === 'PATCH') {
+    let b = {};
+    try { b = JSON.parse(await readBody(req)); } catch { return send(res, 400, 'bad request'); }
+    const name = String(b.displayName ?? '').trim().slice(0, 40);
+    const saved = readConfig(dir) ?? {};
+    saved.displayName = name || null;
+    writeConfig(dir, saved);
+    config.displayName = saved.displayName;  // the running server sees it at once
+    return json(200, { displayName: saved.displayName });
+  }
   if (url.pathname.startsWith('/api/projects')) return projectRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname.startsWith('/api/sessions')) return sessionRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname === '/api/terminal/pair/new' && req.method === 'POST') {
@@ -188,7 +198,7 @@ async function projectRoute(req, res, url, config, json) {
   const id = url.pathname.split('/').filter(Boolean)[2];
   const body = async () => { try { return JSON.parse(await readBody(req)); } catch { return {}; } };
   if (!id && req.method === 'GET') return json(200, { projects: listProjects(config) });
-  if (!id && req.method === 'POST') { const r = createProject(config, (await body()).name); return r.error ? json(400, r) : json(201, r); }
+  if (!id && req.method === 'POST') { const b = await body(); const r = createProject(config, b.name, b); return r.error ? json(400, r) : json(201, r); }
   if (id && req.method === 'PATCH') { const r = updateProject(config, id, await body()); return r.error ? json(r.code ?? 400, r) : json(200, r); }
   if (id && req.method === 'DELETE') { const r = deleteProject(config, id); return r.error ? json(r.code ?? 400, r) : json(200, r); }
   return send(res, 405, 'method not allowed');
@@ -214,6 +224,11 @@ async function sessionRoute(req, res, url, config, json) {
   if (!action && req.method === 'GET') return json(200, { session: s });
   if (!action && req.method === 'PATCH') { const r = updateSession(config, id, (await body()) ?? {}); return r.error ? json(r.code ?? 400, r) : json(200, r); }
   if (!action && req.method === 'DELETE') { const r = deleteSession(config, id); return r.error ? json(r.code ?? 400, r) : json(200, r); }
+  if (action === 'attach' && req.method === 'POST') {
+    const b = (await body()) ?? {};
+    const r = attachFile(config, id, { path: b.path, from: b.from });
+    return r.error ? json(r.code ?? 400, r) : json(201, r);
+  }
   if (action === 'files' && req.method === 'POST' && !parts[4]) {
     let data;
     try { data = await readRaw(req, 25 * 1024 * 1024); } catch (e) { return json(e.code ?? 400, { error: e.message }); }
@@ -280,7 +295,7 @@ export function createServer(config) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
     }
-    if (/^\/api\/(terminal\/|agents$|models$|runs$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
+    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
     return serveStatic(res, url.pathname);
   });

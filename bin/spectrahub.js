@@ -75,6 +75,9 @@ Usage: spectrahub <command> [options]
   doctor      check the install and report every deviation
   service     install | uninstall the systemd unit
               --system     system-wide unit (needs root)
+  attach      hand a file to a chat session: spectrahub attach FILE
+              inside an agent run the session comes from SPECTRAHUB_SESSION;
+              --session ID otherwise
   login       print a login link: open it and the browser is in (works once, 15 min)
               --ttl MIN    keep it valid longer, up to a week (still works once)
   token       print the owner token for the terminal (created on first use)
@@ -85,6 +88,24 @@ Usage: spectrahub <command> [options]
 
   version() {
     console.log(VERSION);
+  },
+
+  async attach() {
+    const { dir, config } = need();
+    const file = args.slice(1).find((a) => !a.startsWith('--') && a !== flag('session', ''));
+    const session = flag('session', process.env.SPECTRAHUB_SESSION);
+    if (!file || typeof session !== 'string') {
+      console.error('usage: spectrahub attach FILE [--session ID]   (SPECTRAHUB_SESSION is set inside agent runs)');
+      process.exit(1);
+    }
+    const res = await fetch(`http://${config.server.host}:${config.server.port}/api/sessions/${session}/attach`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ensureToken(dir)}` },
+      body: JSON.stringify({ path: resolve(file), from: process.env.SPECTRAHUB_AGENT ?? 'agent' }),
+    }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: e.message }) }));
+    const body = await res.json();
+    if (!res.ok) { console.error(`not attached: ${body.error ?? res.status}`); process.exit(1); }
+    console.log(`attached: ${body.file.name} (${body.file.id})`);
   },
 
   login() {

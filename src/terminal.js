@@ -135,6 +135,7 @@ export function terminalInfo(config) {
     cwd,
     cwdShort: cwd === home ? '~' : cwd.startsWith(home + '/') ? '~' + cwd.slice(home.length) : cwd,
     tty: false,
+    displayName: config.displayName ?? null,
     commands: allowedCommands(),
   };
 }

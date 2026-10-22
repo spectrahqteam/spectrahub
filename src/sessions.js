@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, normalize } from 'node:path';
-import { scan, turn, newRef } from './agents.js';
+import { codexLimits, scan, turn, newRef } from './agents.js';
 
 const CONTEXT_CHARS = 8000;
 const sessions = new Map();     // id -> session (loaded lazily)
@@ -30,8 +30,16 @@ function load(config, id) {
   if (!existsSync(file)) return null;
   const s = JSON.parse(readFileSync(file, 'utf8'));
   for (const a of Object.values(s.agents)) a.state = 'idle';  // a restart ends any run in flight
+  // Sessions from before automatic names carry a date; name them after their first line instead.
+  const first = s.log.find((e) => e.who === 'you' && e.s);
+  if (first && /^sesja \d{4}-\d\d-\d\d \d\d:\d\d$/.test(s.title)) { s.title = titleFrom(first.s); s.autoTitle = false; save(config, s); }
   sessions.set(id, s);
   return s;
+}
+
+function titleFrom(text) {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return t.length > 48 ? t.slice(0, 47).trimEnd() + '…' : t;
 }
 
 function publish(id, event) {
@@ -66,18 +74,23 @@ function saveProjects(config, list) {
   writeFileSync(projectsFile(config) + '.tmp', JSON.stringify(list));
   renameSync(projectsFile(config) + '.tmp', projectsFile(config));
 }
-export function createProject(config, name) {
+const COLOR = /^#[0-9a-f]{6}$/i;
+const ICON = /^[a-z-]{2,20}$/;
+export function createProject(config, name, look = {}) {
   const n = String(name ?? '').trim().slice(0, 60);
   if (!n) return { error: 'name required' };
-  const p = { id: randomUUID().slice(0, 8), name: n, createdAt: new Date().toISOString() };
+  const p = { id: randomUUID().slice(0, 8), name: n, createdAt: new Date().toISOString(),
+    icon: ICON.test(look.icon ?? '') ? look.icon : 'folder', color: COLOR.test(look.color ?? '') ? look.color : '#8c8c8c' };
   saveProjects(config, [...listProjects(config), p]);
   return { project: p };
 }
-export function updateProject(config, id, { name }) {
+export function updateProject(config, id, { name, icon, color }) {
   const list = listProjects(config);
   const p = list.find((x) => x.id === id);
   if (!p) return { error: 'no such project', code: 404 };
   if (String(name ?? '').trim()) p.name = String(name).trim().slice(0, 60);
+  if (ICON.test(icon ?? '')) p.icon = icon;
+  if (COLOR.test(color ?? '')) p.color = color;
   saveProjects(config, list);
   return { project: p };
 }
@@ -179,6 +192,49 @@ export function saveUpload(config, id, { name, type, data }) {
   return { file: f };
 }
 
+// Hands a file on this server to the chat (spectrahub attach, OpenClaw media, paths agents name).
+export function attachFile(config, id, { path, from = 'agent' }) {
+  const s = load(config, id);
+  if (!s) return { error: 'no such session', code: 404 };
+  if (typeof path !== 'string' || !isAbsolute(path)) return { error: 'absolute path required', code: 400 };
+  if (SECRET.test(path)) return { error: 'refused: looks like a secret', code: 403 };
+  let st;
+  try { st = statSync(path); } catch { return { error: 'no such file', code: 404 }; }
+  if (!st.isFile()) return { error: 'not a file', code: 400 };
+  const who = s.agents[from] ? from : 'agent';
+  const f = track(s, path, who);
+  const reply = [...s.log].reverse().find((e) => e.who === who && e.status === 'running');
+  if (reply) addReplyFile(s, reply, f);
+  save(config, s);
+  publish(s.id, { type: 'files', files: s.files });
+  return { file: f };
+}
+
+function addReplyFile(s, reply, f) {
+  if (!f || (reply.files ??= []).includes(f.id)) return;
+  reply.files.push(f.id);
+  publish(s.id, { type: 'reply-files', n: reply.n, files: reply.files });
+}
+
+// Paths a shell command writes to: > file, >> file, tee file, cp/mv … dest, -o/-O file.
+const WRITES = [/(?:^|[\s;|&])\d?>>?\s*(['"]?)(\/[^\s'";|&<>]+)\1/g, /\btee\s+(?:-a\s+)?(['"]?)(\/[^\s'";|&<>]+)\1/g,
+  /\b(?:cp|mv|install)\s+(?:-\S+\s+)*\S+\s+(['"]?)(\/[^\s'";|&<>]+)\1\s*(?:$|[;|&])/gm, /\s-[oO]\s+(['"]?)(\/[^\s'";|&<>]+)\1/g];
+function writtenBy(command) {
+  const out = new Set();
+  for (const re of WRITES) for (const m of String(command ?? '').matchAll(re)) out.add(m[2]);
+  return [...out].filter((p) => !p.startsWith('/dev/'));
+}
+// Absolute paths named in a reply.
+function namedIn(text) {
+  return [...new Set([...String(text ?? '').matchAll(/(?:^|[\s`'"(\[])(\/(?:[\w.@+-]+\/)*[\w.@+-]+\.[A-Za-z0-9]{1,8})(?=$|[\s`'"),.:;\]])/gm)].map((m) => m[1]))];
+}
+export { writtenBy, namedIn };  // for tests
+
+// Keeps a file only if it was written while this turn ran: naming an old file does not attach it.
+function freshFile(path, since) {
+  try { const st = statSync(path); return st.isFile() && st.mtimeMs >= since - 2000; } catch { return false; }
+}
+
 // A file may be read only if this session knows it: uploaded here or written by its agents.
 export function sessionFile(config, id, fileId) {
   const s = load(config, id);
@@ -262,8 +318,7 @@ export async function send(config, id, { to, text, attachments = [] }) {
   const files = attachments.map((fid) => s.files?.find((f) => f.id === fid)).filter(Boolean);
   const mine = add(config, s, { who: 'you', to: targets, s: text, ...(files.length ? { files: files.map((f) => f.id) } : {}) });
   if (s.autoTitle) {  // an unnamed session takes its name from the first line
-    const t = text.replace(/\s+/g, ' ').trim();
-    s.title = t.length > 48 ? t.slice(0, 47).trimEnd() + '…' : t;
+    s.title = titleFrom(text);
     s.autoTitle = false;
     publish(s.id, { type: 'title', title: s.title });
   }
@@ -291,7 +346,9 @@ export async function send(config, id, { to, text, attachments = [] }) {
     }
     setState(s, agent, 'busy');
     const images = files.filter((f) => f.type.startsWith('image/')).map((f) => f.path);
-    const stop = turn(rt, { ref: st.ref, started: st.started, prompt, cwd: s.cwd, model: st.model || null, effort: st.effort || null, images }, (e) => {
+    const hint = st.started ? '' : '\n\n(SpectraHub: jeśli przygotujesz plik dla użytkownika, podaj w odpowiedzi jego pełną ścieżkę — pojawi się w czacie jako plik do otwarcia.)';
+    const env = { SPECTRAHUB_SESSION: s.id, SPECTRAHUB_AGENT: agent, SPECTRAHUB_HOME: config.dir };
+    const stop = turn(rt, { ref: st.ref, started: st.started, prompt: prompt + hint, cwd: s.cwd, model: st.model || null, effort: st.effort || null, images, env }, (e) => {
       if (e.type === 'text') {
         const last = reply.items.at(-1);
         const s1 = last?.k === 'text' && e.block && last.s && !last.s.endsWith('\n') ? '\n' + e.s : e.s;
@@ -316,6 +373,10 @@ export async function send(config, id, { to, text, attachments = [] }) {
           }
         } else {
           for (const fid of step.files ?? []) track(s, s.files.find((f) => f.id === fid)?.path, agent);  // size after writing
+          if (step.kind === 'tool') {  // shell writes (cat > f, tee, cp, -o) count as files too
+            const made = writtenBy(step.title).filter((p) => freshFile(p, began)).map((p) => track(s, p, agent)).filter(Boolean);
+            if (made.length) { step.files = made.map((f) => f.id); made.forEach((f) => addReplyFile(s, reply, f)); publish(s.id, { type: 'files', files: s.files }); }
+          }
           step.status = e.ok === false ? 'error' : 'ok';
           if (e.output != null) step.output = e.output;
           if (e.exit != null) step.exit = e.exit;
@@ -329,6 +390,12 @@ export async function send(config, id, { to, text, attachments = [] }) {
       } else if (e.type === 'limits') {
         st.limits = { windows: e.windows, status: e.status, at: new Date().toISOString() };
         publish(s.id, { type: 'limits', agent, limits: st.limits });
+      } else if (e.type === 'file') {
+        const f = track(s, e.path, agent);
+        if (f) { addReplyFile(s, reply, f); publish(s.id, { type: 'files', files: s.files }); }
+      } else if (e.type === 'limits-codex') {
+        const l = codexLimits(st.ref);
+        if (l) { st.limits = { ...l, at: new Date().toISOString() }; publish(s.id, { type: 'limits', agent, limits: st.limits }); }
       } else if (e.type === 'ref') {
         st.ref = e.ref;
       } else if (e.type === 'error') {
@@ -338,6 +405,8 @@ export async function send(config, id, { to, text, attachments = [] }) {
         if (st.ref) st.started = true;
         reply.s = reply.s.trimEnd();
         reply.status = reply.error ? 'error' : 'done';
+        for (const p of namedIn(reply.s)) if (freshFile(p, began) && !SECRET.test(p)) addReplyFile(s, reply, track(s, p, agent));
+        if (reply.files?.length) publish(s.id, { type: 'files', files: s.files });
         const u = reply.usage ?? {};
         const tot = (st.usage ??= { input: 0, output: 0, cost: 0, turns: 0 });  // running totals for the usage view
         tot.input += u.input ?? 0;

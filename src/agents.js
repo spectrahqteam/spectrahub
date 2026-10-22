@@ -2,7 +2,7 @@
 // Every adapter keeps the runtime's own session, so the next turn continues the same conversation.
 import { spawn, execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync, rmSync } from 'node:fs';
+import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
@@ -325,7 +325,11 @@ const claude = {
     } else if (d.type === 'system' && d.subtype === 'init' && d.model) {
       emit({ type: 'usage', model: d.model });
     } else if (d.type === 'rate_limit_event' && d.rate_limit_info?.unifiedWindows) {
-      emit({ type: 'limits', windows: d.rate_limit_info.unifiedWindows, status: d.rate_limit_info.status });
+      const w = d.rate_limit_info.unifiedWindows;
+      emit({ type: 'limits', status: d.rate_limit_info.status, windows: [
+        w.five_hour && { label: 'sesja (5 godz)', used: w.five_hour.utilization, resetsAt: w.five_hour.resetsAt },
+        w.seven_day && { label: 'tydzień', used: w.seven_day.utilization, resetsAt: w.seven_day.resetsAt },
+      ].filter(Boolean) });
     } else if (d.type === 'result') {
       const u = d.usage ?? {};
       const last = (u.iterations ?? []).at(-1) ?? u;
@@ -345,6 +349,39 @@ function unwrap(command) {
   const c = String(command ?? '').trim();
   const m = /^(?:\/usr)?\/bin\/(?:ba|z)?sh\s+-l?c\s+(?:(['"])([\s\S]*)\1|([\s\S]+))$/.exec(c);
   return m ? (m[2] ?? m[3]).replace(/'"'"'/g, "'") : c;
+}
+
+// Codex keeps plan limits in its own session files (~/.codex/sessions/…/rollout-*-<thread>.jsonl).
+const rollouts = new Map();  // thread id -> file
+function findRollout(thread) {
+  if (rollouts.has(thread)) return rollouts.get(thread);
+  const root = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'sessions');
+  const walk = (dir, depth) => {
+    let names = [];
+    try { names = readdirSync(dir).sort().reverse(); } catch { return null; }
+    for (const n of names) {
+      const p = join(dir, n);
+      if (n.endsWith('.jsonl') && n.includes(thread)) return p;
+      if (depth < 3 && !n.includes('.')) { const hit = walk(p, depth + 1); if (hit) return hit; }
+    }
+    return null;
+  };
+  const f = walk(root, 0);
+  if (f) rollouts.set(thread, f);
+  return f;
+}
+export function codexLimits(thread) {
+  const f = thread && findRollout(thread);
+  if (!f) return null;
+  let last = null;
+  try {
+    for (const line of readFileSync(f, 'utf8').split('\n')) if (line.includes('"rate_limits"')) last = line;
+  } catch { return null; }
+  if (!last) return null;
+  const r = JSON.parse(last).payload?.rate_limits;
+  if (!r) return null;
+  const win = (x) => x && { label: x.window_minutes >= 10080 ? 'tydzień' : x.window_minutes >= 1440 ? 'doba' : `sesja (${Math.round(x.window_minutes / 60)} godz)`, used: (x.used_percent ?? 0) / 100, resetsAt: x.resets_at };
+  return { windows: [win(r.primary), win(r.secondary)].filter(Boolean), plan: r.plan_type ?? null };
 }
 
 // Codex: messages, commands with their output and exit code, file changes, plan and reasoning.
@@ -377,6 +414,7 @@ const codex = {
     else if (d.type === 'turn.completed') {
       emit({ type: 'usage', input: d.usage?.input_tokens ?? 0, output: (d.usage?.output_tokens ?? 0) + (d.usage?.reasoning_output_tokens ?? 0),
         context: (d.usage?.input_tokens ?? 0) + (d.usage?.output_tokens ?? 0) });
+      emit({ type: 'limits-codex' });  // read from the rollout file once the turn is written
       emit({ type: 'done' });
     }
   },
@@ -437,7 +475,14 @@ const openclaw = {
   whole(text, emit) {
     let d;
     try { d = JSON.parse(text); } catch { return emit({ type: 'error', s: short(text.trim() || 'brak odpowiedzi', 400) }); }
-    for (const p of d.result?.payloads ?? []) if (p.text) emit({ type: 'text', s: p.text.trimEnd(), block: true });
+    for (const p of d.result?.payloads ?? []) {
+      if (p.text) emit({ type: 'text', s: p.text.trimEnd(), block: true });
+      // files the agent hands over (mediaUrl / mediaUrls): local ones become file cards in the chat
+      for (const m of [p.mediaUrl, ...(Array.isArray(p.mediaUrls) ? p.mediaUrls : [])].filter(Boolean)) {
+        const path = String(m).startsWith('file://') ? decodeURIComponent(String(m).slice(7)) : String(m);
+        if (path.startsWith('/')) emit({ type: 'file', path });
+      }
+    }
     const m = d.result?.meta?.agentMeta ?? {};
     const u = m.usage;
     if (u) {
@@ -457,7 +502,7 @@ export function newRef(id) {
 }
 
 // Runs one turn. `emit` receives {type: text|step|step-end|usage|limits|error|ref|done}; the returned function stops it.
-export function turn(rt, { ref, started, prompt, cwd, model, effort, images }, emit) {
+export function turn(rt, { ref, started, prompt, cwd, model, effort, images, env: extra = {} }, emit) {
   const a = Object.create(ADAPTERS[rt.id]);  // per-run state (e.g. dsh: did text already stream)
   let file = null;
   if (rt.id === 'openclaw') {
@@ -467,7 +512,7 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images }, e
     writeFileSync(file, prompt, { mode: 0o600 });
   }
   const l = rt.launch;
-  const env = { ...process.env, ...(l?.envFile ? readEnvFile(l.envFile) : {}), ...(l?.env ?? {}), NO_COLOR: '1' };
+  const env = { ...process.env, ...(l?.envFile ? readEnvFile(l.envFile) : {}), ...(l?.env ?? {}), ...extra, NO_COLOR: '1' };
   const opts = { agent: rt.agent, file, model, effort, images };
   const [bin, args] = l ? [l.node, [l.script, ...a.argv(ref, started, opts)]] : [rt.path, a.argv(ref, started, opts)];
   const child = spawn(bin, args, {

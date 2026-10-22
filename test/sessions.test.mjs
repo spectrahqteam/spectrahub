@@ -17,7 +17,7 @@ fs.appendFileSync(${JSON.stringify(argsLog)}, JSON.stringify(process.argv.slice(
 let input = '';
 process.stdin.on('data', (c) => { input += c; });
 process.stdin.on('end', () => {
-  const last = input.trim().split('\\n').pop();
+  const last = input.trim().split('\\n').filter((l) => l && !l.startsWith('(SpectraHub:')).pop();
   const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
   out({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'text' } } });
   for (const part of ['echo: ', last]) out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: part } } });
@@ -248,4 +248,29 @@ test('uploads reach the agent as files on the server; only known files can be re
   const s = (await (await api(`/api/sessions/${session.id}`)).json()).session;
   assert.equal(s.agents.claude.usage.turns, 1);
   assert.equal(s.agents.claude.usage.cost, 0.01);
+});
+
+test('files agents write with shell commands or name in the reply reach the chat; attach hands any file over', async () => {
+  const { writtenBy, namedIn } = await import('../src/sessions.js');
+  assert.deepEqual(writtenBy("cat > /srv/x/strona.html <<'EOF'"), ['/srv/x/strona.html']);
+  assert.deepEqual(writtenBy('ls > /dev/null'), []);
+  assert.deepEqual(namedIn('gotowe: `/tmp/a.json` i /srv/b.html.'), ['/tmp/a.json', '/srv/b.html']);
+
+  const { session } = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ agents: ['claude'] }) })).json();
+  const out = join(dir, 'raport.txt');
+  writeFileSync(out, 'gotowy raport');
+  const r = await api(`/api/sessions/${session.id}/attach`, { method: 'POST', body: JSON.stringify({ path: out, from: 'claude' }) });
+  assert.equal(r.status, 201);
+  const { file } = await r.json();
+  assert.equal(file.from, 'claude');
+  assert.equal((await (await api(`/api/sessions/${session.id}/files/${file.id}`)).text()), 'gotowy raport');
+  assert.equal((await api(`/api/sessions/${session.id}/attach`, { method: 'POST', body: JSON.stringify({ path: join(dir, 'token') }) })).status, 403, 'secrets are refused');
+  assert.equal((await api(`/api/sessions/${session.id}/attach`, { method: 'POST', body: JSON.stringify({ path: 'relative.txt' }) })).status, 400);
+});
+
+test('the owner can set the name the app greets', async () => {
+  const res = await api('/api/settings', { method: 'PATCH', body: JSON.stringify({ displayName: '  Ala ' }) });
+  assert.deepEqual(await res.json(), { displayName: 'Ala' });
+  const info = await (await api('/api/terminal/info')).json();
+  assert.equal(info.displayName, 'Ala');
 });
