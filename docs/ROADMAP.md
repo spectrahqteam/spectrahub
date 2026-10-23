@@ -26,7 +26,7 @@
 ## 0.4.0 — files
 - [ ] terminal session per host (PTY), commands beyond the read-only list behind approvals
 - [ ] file tree + preview with allowlist/denylist
-- [ ] GitHub panel (read-only: repos, branches, PR list)
+- [x] GitHub panel, read only: several accounts with their own tokens (private repos too) — code, README, commits, PRs, issues, branches
 
 ## 0.5.0 — servers
 - [ ] host cards, disk/RAM/uptime, service states

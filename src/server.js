@@ -11,6 +11,7 @@ import { authCookie, authorize, cookieToken, createPairing, redeemPairing, runLi
 import { models, scan } from './agents.js';
 import { sessionUsage } from './usage.js';
 import { connections, saveKey, setMode } from './connections.js';
+import * as github from './github.js';
 import {
   attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, recentFiles, runs, saveUpload,
   send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession,
@@ -137,6 +138,43 @@ function readBody(req, limit = 4096) {
   });
 }
 
+// GitHub, read only: accounts the owner connected, and what each of their tokens can see.
+//   /api/github                                   GET list · POST {token, label} connect
+//   /api/github/:acc                              DELETE disconnect
+//   /api/github/:acc/repos                        GET every repository the token sees
+//   /api/github/:acc/repo/:owner/:name[/:what]    GET details+README · contents · commits · pulls · issues · raw
+async function githubRoute(req, res, url, dir, json) {
+  const [acc, what, owner, name, sub] = url.pathname.split('/').slice(3).filter(Boolean).map(decodeURIComponent);
+  const q = url.searchParams;
+  try {
+    if (!acc && req.method === 'GET') return json(200, { accounts: github.accounts(dir) });
+    if (!acc && req.method === 'POST') {
+      let b = {};
+      try { b = JSON.parse(await readBody(req)); } catch { return send(res, 400, 'bad request'); }
+      return json(201, { account: await github.connect(dir, b) });
+    }
+    if (acc && !what && req.method === 'DELETE') { github.disconnect(dir, acc); return json(200, { ok: true }); }
+    if (req.method !== 'GET') return send(res, 405, 'method not allowed');
+    if (what === 'repos' && !owner) return json(200, { repos: await github.repos(dir, acc) });
+    if (what === 'repo' && owner && name) {
+      if (!sub) return json(200, { repo: await github.repo(dir, acc, owner, name) });
+      if (sub === 'contents') return json(200, await github.contents(dir, acc, owner, name, q.get('path'), q.get('ref')));
+      if (sub === 'commits') return json(200, { commits: await github.commits(dir, acc, owner, name, q.get('ref')) });
+      if (sub === 'pulls') return json(200, { pulls: await github.pulls(dir, acc, owner, name) });
+      if (sub === 'issues') return json(200, { issues: await github.issues(dir, acc, owner, name) });
+      if (sub === 'raw') {
+        const f = await github.raw(dir, acc, owner, name, q.get('path'), q.get('ref'));
+        res.writeHead(200, { 'Content-Type': f.type, 'Cache-Control': 'private, max-age=300', 'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'" });
+        return res.end(f.body);
+      }
+    }
+    return send(res, 404, 'not found');
+  } catch (e) {
+    return json(e instanceof github.GitHubError ? e.status : 500, { error: e instanceof github.GitHubError ? e.message : 'błąd serwera' });
+  }
+}
+
 // Owner routes (terminal, agents, sessions): 403 until a token exists, 401 on a wrong one.
 async function terminalRoute(req, res, url, config) {
   const dir = config.dir ?? defaultDir();
@@ -186,6 +224,7 @@ async function terminalRoute(req, res, url, config) {
     const r = conn[2] ? saveKey(dir, conn[1], b.key) : setMode(dir, config, conn[1], b.mode);
     return json(r.error ? 400 : 200, r);
   }
+  if (url.pathname.startsWith('/api/github')) return githubRoute(req, res, url, dir, json);
   if (url.pathname.startsWith('/api/projects')) return projectRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname.startsWith('/api/sessions')) return sessionRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname === '/api/terminal/pair/new' && req.method === 'POST') {
@@ -332,7 +371,7 @@ export function createServer(config) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
     }
-    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|fs\/dirs$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
+    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|github(\/|$)|fs\/dirs$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
     return serveStatic(res, url.pathname);
   });

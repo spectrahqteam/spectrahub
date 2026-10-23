@@ -1474,13 +1474,13 @@ async function home(section = 'chat') {
 }
 const SOON = {
   files: ['Pliki', 'Drzewo plików i podgląd, tylko do odczytu, z listą dozwolonych katalogów. Pliki z rozmów są już w menu sesji.', '0.4.0'],
-  github: ['GitHub', 'Repozytoria, gałęzie i pull requesty — tylko odczyt.', '0.4.0'],
   servers: ['Serwery', 'Karty hostów: dysk, RAM, uptime, usługi i mapa.', '0.5.0'],
   studio: ['SpectraStudio', 'Generowanie obrazów, wideo i audio.', 'osobny produkt'],
 };
 async function openPage(name) {
   pageName = name;
   if (name === 'shell') { setView('shell'); return; }
+  if (name === 'github' && typeof githubPage === 'function') return githubPage();  // web/github.js
   setView('page');
   const box = el('div', 'page');
   if (name === 'agents') {
