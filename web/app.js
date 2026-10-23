@@ -1068,9 +1068,9 @@ async function openSession(id) {
   chat.active = [Object.keys(session.agents)[0]];
   chat.files = [];
   cInput.value = drafts()[session.id] ?? '';
-  autosize();
   store.set(LAST, id);
   setView('chat');
+  autosize();
   renderLog(session);
   renderHeader();
   renderComposer();
@@ -1170,7 +1170,11 @@ function updateSend() {
   sendBtn.disabled = !stop && !cInput.value.trim() && !chat.files.length;
 }
 
-function autosize() { cInput.style.height = 'auto'; cInput.style.height = Math.min(cInput.scrollHeight, 200) + 'px'; }
+// Measured only while the box is on screen: a hidden box measures 0 and would stay collapsed.
+function autosize() {
+  cInput.style.height = 'auto';
+  if (cInput.offsetParent) cInput.style.height = Math.min(cInput.scrollHeight, 200) + 'px';
+}
 
 // The agent sheet: who gets the next line, and with which model and effort.
 const PERM_INFO = {
