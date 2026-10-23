@@ -103,6 +103,10 @@ test('an agent\'s own files are found, grouped, and can be edited safely', async
   assert.equal((await save({ path: join(home, '.claude', '.credentials.json'), text: '{}' })).status, 403, 'credentials are never edited here');
   assert.equal((await save({ path: '/etc/hostname', text: 'x' })).status, 403, 'only files the scanner found');
   assert.ok(existsSync(settings) && readFileSync(settings, 'utf8') === '{"model":"opus"}\n');
+  const { versions } = await (await api(`/api/agents/claude/history?path=${q(path)}`)).json();
+  assert.equal(versions.length, 1, 'the saved version is in the history');
+  assert.equal(readFileSync(versions[0].path, 'utf8'), '# Charlie\nTożsamość agenta.\n');
+  assert.deepEqual((await (await api(`/api/agents/claude/history?path=${q(settings)}`)).json()).versions, [], 'other files have their own history');
 });
 
 test('the scanner finds agents and their files wherever they were put', async () => {

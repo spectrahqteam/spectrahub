@@ -377,25 +377,58 @@ function ghItem(title, sub, right, url) {
 }
 
 // A file: code with line numbers, a picture, or rendered Markdown; big and binary files open on GitHub.
+// The file viewer's head and toolbar, the same everywhere (GitHub, agents' files, the server's):
+// a name with a quiet line under it, then one row — a podgląd/kod switch on the left, small
+// icon buttons on the right. `actions`: { icon, label, onClick | href, download, primary, text }.
+function fileHead(icon, name, sub) {
+  const head = el('div', 'fv-head');
+  head.append(svgIcon(icon));
+  const t = el('div', 'fv-title');
+  t.append(el('b', null, name));
+  if (sub) t.append(el('small', null, sub));
+  head.append(t);
+  return head;
+}
+function toolBar(segments, actions) {
+  const bar = el('div', 'fv-bar');
+  if (segments?.length) {
+    const seg = el('div', 'seg');
+    for (const sg of segments) {
+      const b = el('button', sg.on ? 'on' : '', sg.label);
+      b.type = 'button';
+      b.addEventListener('click', sg.onClick);
+      seg.append(b);
+    }
+    bar.append(seg);
+  }
+  bar.append(el('span', 'sp'));
+  for (const a of actions.filter(Boolean)) {
+    const b = el(a.href ? 'a' : 'button', `tb${a.primary ? ' primary' : ''}${a.text ? ' text' : ''}`);
+    if (a.href) Object.assign(b, { href: a.href, ...(a.download ? { download: a.download } : { target: '_blank', rel: 'noopener noreferrer' }) });
+    else { b.type = 'button'; b.addEventListener('click', a.onClick); }
+    b.title = a.label;
+    b.setAttribute('aria-label', a.label);
+    b.append(svgIcon(a.icon));
+    if (a.text) b.append(el('span', null, a.text));
+    bar.append(b);
+  }
+  return bar;
+}
+
 async function ghFile(body, v, box) {
   if (v.file.pending) {
     try { v.file = (await ghJson(`${ghPath(v.acc, v.owner, v.name, 'contents')}?path=${encodeURIComponent(v.file.path)}&ref=${encodeURIComponent(v.ref)}`)).file; }
     catch (e) { body.replaceChildren(ghCrumbs(v, box), ghError(e)); return; }
   }
   const f = v.file;
-  const head = el('div', 'gh-fhead');
-  head.append(ghIcon('file'), el('b', null, f.name));
   const lines = f.text != null ? f.text.split('\n').length : null;
-  head.append(el('small', null, [lines != null ? plural(lines, 'linia', 'linie', 'linii') : '', kb(f.size)].filter(Boolean).join(' · ')));
-  const acts = el('span', 'gh-facts');
-  if (f.text != null) { const cp = el('button', 'ib sm'); cp.type = 'button'; cp.title = 'Kopiuj'; cp.append(svgIcon(ICON.copy)); cp.addEventListener('click', () => clip(f.text)); acts.append(cp); }
-  const open = el('a', 'ib sm');
-  Object.assign(open, { href: f.url, target: '_blank', rel: 'noopener noreferrer', title: 'Otwórz na GitHubie' });
-  open.append(ghIcon('out'));
-  acts.append(open);
-  head.append(acts);
-  const view = el('div', 'gh-fview');
+  const head = fileHead(GH_ICON.file, f.name, [lines != null ? plural(lines, 'linia', 'linie', 'linii') : '', kb(f.size), v.ref].filter(Boolean).join(' · '));
   const isMd = /\.(md|markdown|mdx)$/i.test(f.name);
+  const bar = toolBar(f.kind === 'text' && isMd ? [['podgląd', false], ['kod', true]].map(([label, raw]) => ({ label, on: Boolean(v.rawMd) === raw, onClick: () => { v.rawMd = raw; ghFile(body, v, box); } })) : null, [
+    f.text != null && { icon: ICON.copy, label: 'Kopiuj', onClick: () => clip(f.text) },
+    { icon: GH_ICON.out, label: 'Otwórz na GitHubie', href: f.url },
+  ]);
+  const view = el('div', 'gh-fview');
   if (f.kind === 'image') {
     const img = el('img', 'gh-img');
     img.src = `${ghPath(v.acc, v.owner, v.name, 'raw')}?path=${encodeURIComponent(f.path)}&ref=${encodeURIComponent(v.ref)}`;
@@ -406,18 +439,9 @@ async function ghFile(body, v, box) {
   } else if (f.kind === 'text') {
     view.append(ghCode(f.text));
   } else {
-    view.append(el('p', 's-note', f.kind === 'binary' ? 'Plik binarny — otwórz go na GitHubie.' : 'Plik jest za duży na podgląd — otwórz go na GitHubie.'));
+    view.append(el('p', 's-note fs-empty', f.kind === 'binary' ? 'Plik binarny — otwórz go na GitHubie.' : 'Plik jest za duży na podgląd — otwórz go na GitHubie.'));
   }
-  if (f.kind === 'text' && isMd) {
-    const sw = el('div', 'effort');
-    for (const [label, raw] of [['podgląd', false], ['kod', true]]) {
-      const b = el('button', `eff${Boolean(v.rawMd) === raw ? ' on' : ''}`, label);
-      b.type = 'button';
-      b.addEventListener('click', () => { v.rawMd = raw; ghFile(body, v, box); });
-      sw.append(b);
-    }
-    body.replaceChildren(ghCrumbs(v, box), head, sw, view);
-  } else body.replaceChildren(ghCrumbs(v, box), head, view);
+  body.replaceChildren(ghCrumbs(v, box), head, bar, view);
 }
 
 function ghCode(text) {

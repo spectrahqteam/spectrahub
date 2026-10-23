@@ -215,6 +215,25 @@ export async function agentFiles(id) {
   return { agent: { id, label: rt?.label ?? id, version: rt?.version ?? null, name: rt?.agent ?? null, home: rt?.launch?.cwd ?? null }, files: out };
 }
 
+// The earlier versions of a file kept by the saves, newest first: when, how big, and where.
+export function history(dir, path) {
+  const key = `__${real(path).replace(/^\//, '').replace(/\//g, '__')}`;
+  const out = [];
+  let days = [];
+  try { days = readdirSync(join(dir, 'backups')); } catch { return out; }
+  for (const day of days) {
+    let names = [];
+    try { names = readdirSync(join(dir, 'backups', day)); } catch { continue; }
+    for (const n of names) {
+      const m = /^(\d{4}-\d\d-\d\d)T(\d\d)-(\d\d)-(\d\d)-(\d{3})Z(__.*)$/.exec(n);
+      if (!m || m[6] !== key) continue;
+      const p = join(dir, 'backups', day, n);
+      out.push({ path: p, at: `${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`, size: statSync(p).size });
+    }
+  }
+  return out.sort((a, b) => b.at.localeCompare(a.at));
+}
+
 // Saving: only a file the scanner found, only if nobody changed it since it was opened (`base`),
 // and JSON that was valid stays valid. The old version goes to the backups first.
 export async function saveAgentFile(dir, id, { path, text, base }) {

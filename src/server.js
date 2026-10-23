@@ -14,7 +14,7 @@ import { connections, saveKey, setMode } from './connections.js';
 import * as github from './github.js';
 import * as gmail from './gmail.js';
 import * as fsview from './fsview.js';
-import { agentFiles, saveAgentFile } from './agentfiles.js';
+import { agentFiles, history, saveAgentFile } from './agentfiles.js';
 import {
   attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, recentFiles, runs, saveUpload,
   send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession,
@@ -281,8 +281,9 @@ async function terminalRoute(req, res, url, config) {
       return res.end(f.data);
     } catch (e) { return json(e instanceof fsview.FsError ? e.status : 500, { error: e.message }); }
   }
-  const af = /^\/api\/agents\/(\w+)\/(files?)$/.exec(url.pathname);
+  const af = /^\/api\/agents\/(\w+)\/(files?|history)$/.exec(url.pathname);
   if (af && af[2] === 'files' && req.method === 'GET') return fsCall(() => agentFiles(af[1]));
+  if (af && af[2] === 'history' && req.method === 'GET') return fsCall(() => ({ versions: history(dir, url.searchParams.get('path') ?? '') }));
   if (af && af[2] === 'file' && req.method === 'PUT') {
     let b = {};
     try { b = JSON.parse(await readBody(req, 1.2 * 1024 * 1024)); } catch { return send(res, 400, 'bad request'); }
@@ -436,7 +437,7 @@ export function createServer(config) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
     }
-    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|github(\/|$)|gmail(\/|$)|fs\/(dirs|list|read|raw)$|agents\/\w+\/files?$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
+    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|github(\/|$)|gmail(\/|$)|fs\/(dirs|list|read|raw)$|agents\/\w+\/(files?|history)$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
     return serveStatic(res, url.pathname);
   });
