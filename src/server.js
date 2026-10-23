@@ -12,6 +12,7 @@ import { models, scan } from './agents.js';
 import { sessionUsage } from './usage.js';
 import { connections, saveKey, setMode } from './connections.js';
 import * as github from './github.js';
+import * as gmail from './gmail.js';
 import {
   attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, recentFiles, runs, saveUpload,
   send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession,
@@ -175,6 +176,46 @@ async function githubRoute(req, res, url, dir, json) {
   }
 }
 
+// Gmail, read only: mailboxes the owner connected with app passwords.
+//   /api/gmail                                    GET list · POST {email, password, label} connect
+//   /api/gmail/:acc                               DELETE disconnect
+//   /api/gmail/:acc/boxes                         GET folders and labels
+//   /api/gmail/:acc/messages?box=&before=&q=      GET newest first, a page at a time, or a Gmail search
+//   /api/gmail/:acc/message/:uid[/part/:id]?box=  GET one message · one attachment's bytes
+async function gmailRoute(req, res, url, dir, json) {
+  const [acc, what, uid, sub, pid] = url.pathname.split('/').slice(3).filter(Boolean).map(decodeURIComponent);
+  const q = url.searchParams;
+  const box = q.get('box') || 'INBOX';
+  try {
+    if (!acc && req.method === 'GET') return json(200, { accounts: gmail.accounts(dir) });
+    if (!acc && req.method === 'POST') {
+      let b = {};
+      try { b = JSON.parse(await readBody(req)); } catch { return send(res, 400, 'bad request'); }
+      return json(201, { account: await gmail.connect(dir, b) });
+    }
+    if (acc && !what && req.method === 'DELETE') { gmail.disconnect(dir, acc); return json(200, { ok: true }); }
+    if (req.method !== 'GET') return send(res, 405, 'method not allowed');
+    if (what === 'boxes') return json(200, { boxes: await gmail.boxes(dir, acc) });
+    if (what === 'messages') return json(200, await gmail.messages(dir, acc, { box, before: q.get('before'), q: (q.get('q') ?? '').slice(0, 300) }));
+    if (what === 'message' && /^\d+$/.test(uid ?? '')) {
+      if (!sub) return json(200, { message: await gmail.message(dir, acc, { box, uid }) });
+      if (sub === 'part' && pid) {
+        const f = await gmail.attachment(dir, acc, { box, uid, part: pid });
+        const image = /^image\/(png|jpe?g|gif|webp|avif|bmp)$/.test(f.type);
+        res.writeHead(200, {
+          'Content-Type': image ? f.type : 'application/octet-stream', 'Cache-Control': 'private, max-age=300', 'X-Content-Type-Options': 'nosniff',
+          'Content-Disposition': `${image ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+          'Content-Security-Policy': "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+        });
+        return res.end(f.data);
+      }
+    }
+    return send(res, 404, 'not found');
+  } catch (e) {
+    return json(e instanceof gmail.GmailError ? e.status : 500, { error: e instanceof gmail.GmailError ? e.message : 'błąd serwera' });
+  }
+}
+
 // Owner routes (terminal, agents, sessions): 403 until a token exists, 401 on a wrong one.
 async function terminalRoute(req, res, url, config) {
   const dir = config.dir ?? defaultDir();
@@ -225,6 +266,7 @@ async function terminalRoute(req, res, url, config) {
     return json(r.error ? 400 : 200, r);
   }
   if (url.pathname.startsWith('/api/github')) return githubRoute(req, res, url, dir, json);
+  if (url.pathname.startsWith('/api/gmail')) return gmailRoute(req, res, url, dir, json);
   if (url.pathname.startsWith('/api/projects')) return projectRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname.startsWith('/api/sessions')) return sessionRoute(req, res, url, { ...config, dir }, json);
   if (url.pathname === '/api/terminal/pair/new' && req.method === 'POST') {
@@ -371,7 +413,7 @@ export function createServer(config) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
     }
-    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|github(\/|$)|fs\/dirs$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
+    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|github(\/|$)|gmail(\/|$)|fs\/dirs$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
     return serveStatic(res, url.pathname);
   });

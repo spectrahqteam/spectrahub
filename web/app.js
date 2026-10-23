@@ -1481,6 +1481,7 @@ async function openPage(name) {
   pageName = name;
   if (name === 'shell') { setView('shell'); return; }
   if (name === 'github' && typeof githubPage === 'function') return githubPage();  // web/github.js
+  if (name === 'gmail' && typeof gmailPage === 'function') return gmailPage();  // web/gmail.js
   setView('page');
   const box = el('div', 'page');
   if (name === 'agents') {

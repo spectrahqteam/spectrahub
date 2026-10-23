@@ -27,6 +27,7 @@
 - [ ] terminal session per host (PTY), commands beyond the read-only list behind approvals
 - [ ] file tree + preview with allowlist/denylist
 - [x] GitHub panel, read only: several accounts with their own tokens (private repos too) — code, README, commits, PRs, issues, branches
+- [x] Gmail, read only: several mailboxes with app passwords over IMAP — folders, labels, Gmail search, mail in a sandbox, attachments; nothing marked as read
 
 ## 0.5.0 — servers
 - [ ] host cards, disk/RAM/uptime, service states
