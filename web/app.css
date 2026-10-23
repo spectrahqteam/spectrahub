@@ -125,7 +125,8 @@ svg.mark{display:inline-block;width:1em;height:1em;vertical-align:-.15em;margin-
 .e.agent .body{white-space:pre-wrap;color:#ececec;margin:4px 0;font-size:14px;line-height:1.65}
 /* an agent at work: its dots, what it does now (a light runs through the words), steps and time;
    the steps stay folded until the bar is tapped */
-.livebar{display:flex;align-items:center;gap:9px;max-width:100%;margin:2px 0 8px;padding:7px 12px;border:1px solid #1f1f1f;border-radius:12px;background:#0a0a0a;text-align:left;min-width:0}
+.livebar{display:block;width:100%;margin:2px 0 8px;padding:7px 12px;border:1px solid #1f1f1f;border-radius:12px;background:#0a0a0a;text-align:left;min-width:0}
+.lb-row{display:flex;align-items:center;gap:9px;min-width:0}
 .livebar .dots{flex:0 0 auto}
 .lb-label{flex:0 0 auto;font-size:12.5px;font-weight:600;background:linear-gradient(90deg,#6b6b6b 0%,#fff 45%,#6b6b6b 70%) 0 0/250% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:lbShine 2.2s linear infinite}
 .lb-detail{flex:1;min-width:0;font-size:11.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -135,7 +136,18 @@ svg.mark{display:inline-block;width:1em;height:1em;vertical-align:-.15em;margin-
 .livebar.wait{border-color:color-mix(in srgb,var(--c) 55%,transparent);background:color-mix(in srgb,var(--c) 7%,#0a0a0a)}
 .livebar.wait .lb-label{background:none;color:var(--c);animation:pulse 1.6s ease-in-out infinite}
 @keyframes lbShine{from{background-position:100% 0}to{background-position:-150% 0}}
-.e.agent.running:not(.show-steps) .tl > .step{display:none}
+/* focus: while it works the text and the commands wait behind the bar; compact: only the commands */
+#out[data-view=focus] .e.agent.running:not(.show-steps) .tl > :is(.body,.step),
+#out[data-view=compact] .e.agent.running:not(.show-steps) .tl > .step{display:none}
+/* its newest sentence, under the bar; a new one rises in */
+.lb-say{display:block;margin-top:5px}
+.lb-say:empty,#out:not([data-view=focus]) .lb-say,.e.agent.show-steps .lb-say{display:none}
+.lb-t{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12.5px;line-height:1.5;color:#cfcfcf;animation:sayIn .4s ease-out}
+.lb-t.think{color:#7a7a7a;font-style:italic}
+@keyframes sayIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+/* the answer, when it lands */
+.e.agent .tl > .body.landed{animation:landIn .5s ease-out}
+@keyframes landIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .e.agent.vote:not(.running):not(.open) > .tl,.e.agent.vote:not(.running):not(.open) > .acts{display:none}
 .e.agent.vote > .a-head{cursor:pointer}
 @keyframes blink{50%{opacity:0}}

@@ -66,6 +66,10 @@ const ICON = {
   check: '<path d="m5 12 5 5 9-10"/>',
   shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>',
   clear: '<path d="M4 20h16M7 16 17 6M14 6h3v3"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  vFocus: '<circle cx="6" cy="12" r="1.6"/><path d="M10 12h10"/>',
+  vCompact: '<path d="M4 8h16M4 12h12M4 16h7"/>',
+  vFull: '<path d="M4 5h16M4 9h16M4 13h16M4 17h16M4 21h10"/>',
 };
 // Project looks: 20 icons, 10 colours, or any colour from the picker.
 const PROJECT_ICONS = {
@@ -357,7 +361,7 @@ function sessionMenu(s) {
       item(ICON.chart, 'Zużycie', () => usageSheet(true)),
       item(ICON.file, 'Pliki sesji', () => filesSheet(true), { sub: `${full.files?.length ?? 0}` }),
       item(ICON.tasks, 'Zadania w tle', () => runsSheet(true)),
-      item(ICON.clear, compact() ? 'Widok: zwarty' : 'Widok: pełny', () => { store.set(COMPACT, compact() ? '0' : '1'); closeSheet(); renderLog(chat.s); toast(compact() ? 'widok zwarty: praca agentów zwinięta' : 'widok pełny: wszystko rozwinięte'); }, { sub: compact() ? 'praca agentów zwinięta, starsze skrócone' : 'wszystko rozwinięte' }),
+      item(ICON.eye, 'Widok rozmowy', () => viewSheet(), { sub: CHAT_VIEWS[chatView()].name }),
     ),
     full && group(
       item(ICON.copy, 'Kopiuj rozmowę', () => { closeSheet(); clip(transcript(full)); }),
@@ -605,6 +609,7 @@ function addText(d, text) {
   if (d._live) setPhase(d, 'Pisze');
   if (!d._last) { d._last = el('div', 'body'); d._tl.append(d._last); }
   d._last.textContent += text;
+  if (d._live) setSay(d, freshSentence(d._last.textContent));
 }
 
 function upsertStep(d, st) {
@@ -621,8 +626,9 @@ function upsertStep(d, st) {
   }
   row._st = st;
   if (d._live) {
-    if (st.status === 'running' || !st.status) setPhase(d, { think: 'Myśli', edit: 'Edytuje', todo: 'Planuje' }[st.kind] ?? 'Pracuje', st.kind === 'think' ? '' : st.kind === 'edit' ? st.diff?.path ?? st.title ?? '' : st.title ?? st.name ?? '');
+    if (st.status === 'running' || !st.status) setPhase(d, ...phaseOf(st));
     else setPhase(d, 'Myśli');
+    if (st.kind === 'think' && st.text) setSay(d, freshSentence(st.text), true);
   }
   const open = row.classList.contains('open') || st.kind === 'todo';
   row.className = `step k-${st.kind} s-${st.status ?? 'running'}${open ? ' open' : ''}`;
@@ -696,11 +702,34 @@ function renderFooter(d, status) {
   }
 }
 
-// Compact view (default): a finished reply folds its work — steps and the text between them — into
-// one line, leaving the answer; older replies and messages show a few lines with "pokaż całość";
-// only the last rounds stay on screen, earlier ones behind a button.
-const COMPACT = 'spectrahub.compact';
-const compact = () => store.get(COMPACT) !== '0';
+// How a conversation shows the agents' work, chosen per device:
+//   focus (default) — while an agent works only what it does now and its newest sentence; a tap shows all
+//   compact — its text streams, its commands stay folded
+//   full    — everything open, commands too
+// In focus and compact a finished reply folds its work — steps and the text between them — into one
+// line, leaving the answer; older replies and messages show a few lines with "pokaż całość"; only the
+// last rounds stay on screen, earlier ones behind a button.
+const CHAT_VIEW = 'spectrahub.view';
+const CHAT_VIEWS = {
+  focus: { name: 'Skupiony', sub: 'w trakcie pracy tylko to, co agent robi, i jego ostatnie zdanie; dotknij, by zobaczyć całość', icon: 'vFocus' },
+  compact: { name: 'Zwarty', sub: 'tekst agenta płynie na żywo, polecenia zwinięte', icon: 'vCompact' },
+  full: { name: 'Pełny', sub: 'wszystko rozwinięte, także polecenia w trakcie pracy', icon: 'vFull' },
+};
+const chatView = () => { const v = store.get(CHAT_VIEW); return CHAT_VIEWS[v] ? v : store.get('spectrahub.compact') === '0' ? 'full' : 'focus'; };
+const compact = () => chatView() !== 'full';
+out.dataset.view = chatView();
+function viewSheet() {
+  const pick = (v) => () => {
+    store.set(CHAT_VIEW, v);
+    out.dataset.view = v;
+    closeSheet();
+    if (chat.s && view === 'chat') renderLog(chat.s);
+    else if (view === 'page' && titleEl.textContent === 'Ustawienia') openPage('settings');
+    toast(`widok: ${CHAT_VIEWS[v].name.toLowerCase()}`);
+  };
+  openSheet('Widok rozmowy', [group(...Object.entries(CHAT_VIEWS).map(([v, m]) => item(ICON[m.icon], m.name, pick(v), { sub: m.sub, right: chatView() === v ? svgIcon(ICON.check) : null })))],
+    { push: sheetStack.length > 0 });
+}
 function foldWork(d) {
   if (d._folded || !compact() || !d._steps.size) return;
   const kids = [...d._tl.children];
@@ -764,6 +793,7 @@ function tidyLog() {
 
 function finish(d, status, error) {
   if (!d._tl) return;
+  const landing = Boolean(d._live) && status !== 'running';  // it just finished, in front of the owner
   d.querySelector(':scope > .live')?.remove();
   clearInterval(d._tick);
   d._live = null;
@@ -775,22 +805,27 @@ function finish(d, status, error) {
   renderMeta(d, status);
   renderFooter(d, status);
   if (status !== 'running') foldWork(d);
+  if (landing && chatView() === 'focus') for (const b of d._tl.querySelectorAll(':scope > .body')) b.classList.add('landed');
 }
 
-// While an agent works: its colour dots, what it does now ("Myśli", "Pracuje: …", "Pisze",
-// "Czeka na Twoją decyzję"), how many steps and how long. The steps stay folded until asked for.
+// While an agent works: its colour dots, what it does now ("Czyta", "Uruchamia", "Pisze",
+// "Czeka na Twoją decyzję") and on what, how many steps and how long; in the focus view also its
+// newest sentence, replaced as it writes. A tap on the bar shows everything.
 function liveBar(d) {
   const bar = el('button', 'live livebar');
   bar.type = 'button';
+  const row = el('span', 'lb-row');
   const dots = el('span', 'dots');
   dots.append(el('i'), el('i'), el('i'));
   const label = el('span', 'lb-label');
   const detail = el('span', 'lb-detail');
   const count = el('small', 'lb-count');
-  bar.append(dots, label, detail, count, el('span', 'lb-chev', '▸'));
+  row.append(dots, label, detail, count, el('span', 'lb-chev', '▸'));
+  const say = el('span', 'lb-say');
+  bar.append(row, say);
   bar.addEventListener('click', () => d.classList.toggle('show-steps'));
   const start = Date.parse(d._entry?.at ?? '') || Date.now();
-  d._live = { bar, label, detail, count };
+  d._live = { bar, label, detail, count, say, said: '' };
   const tick = () => {
     const sec = Math.max(0, Math.floor((Date.now() - start) / 1000));
     const n = [...d._steps.values()].filter((r) => !r.classList.contains('k-think')).length;
@@ -798,10 +833,56 @@ function liveBar(d) {
   };
   d._tick = setInterval(tick, 1000);
   tick();
+  // opened while it works: pick up where it is
+  const lastKid = [...d._tl.children].at(-1);
+  if (!d._phase && lastKid?.classList.contains('body')) d._phase = ['Pisze', ''];
+  else if (!d._phase && lastKid?._st?.status === 'running') d._phase = phaseOf(lastKid._st);
+  const said = [...d._tl.children].reverse().find((k) => k.classList.contains('body') || k._st?.kind === 'think');
+  if (said) setSay(d, freshSentence(said._st?.text ?? said.textContent), Boolean(said._st));
   paintPhase(d);
   return bar;
 }
 function setPhase(d, phase, detail = '') { d._phase = [phase, detail]; paintPhase(d); }
+
+// What a step does, in a word, and on what: "Czyta" a file, "Uruchamia" a command, "Szuka"…
+// Tool names differ per runtime, so they are matched by the words they are made of.
+const VERBS = [
+  [['web', 'webfetch', 'websearch', 'fetch', 'browser', 'browse', 'http', 'url'], 'Sprawdza w sieci'],
+  [['grep', 'glob', 'search', 'find', 'ls', 'list', 'rg'], 'Szuka'],
+  [['read', 'view', 'cat'], 'Czyta'],
+  [['bash', 'shell', 'exec', 'command', 'run', 'terminal', 'process'], 'Uruchamia'],
+  [['edit', 'multiedit', 'notebookedit', 'write', 'patch', 'apply'], 'Edytuje'],
+  [['task', 'agent', 'subagent', 'spawn', 'delegate'], 'Zleca zadanie'],
+];
+const tailPath = (p) => (/^[~/]\S*$/.test(p) ? p.split('/').filter(Boolean).slice(-2).join('/') : p);
+function phaseOf(st) {
+  if (st.kind === 'think') return ['Myśli', ''];
+  if (st.kind === 'todo') return ['Planuje', ''];
+  if (st.kind === 'edit') return ['Edytuje', tailPath(st.diff?.path ?? st.title ?? '')];
+  const words = String(st.name ?? '').toLowerCase().split(/[^a-z]+/);
+  const verb = VERBS.find(([w]) => words.some((x) => w.includes(x)))?.[1] ?? 'Pracuje';
+  const on = st.title || st.name || '';
+  return [verb, verb === 'Czyta' || verb === 'Edytuje' ? tailPath(on) : on];
+}
+
+// The sentence the agent is on: the newest full one, or the one being written once it is long
+// enough to say something. Code blocks and markdown marks are left out.
+function freshSentence(text) {
+  const clean = String(text).slice(-1500).replace(/```[\s\S]*?(?:```|$)/g, '\n').replace(/\*\*|__|`/g, '').replace(/^[ \t]*[#>]+[ \t]*/gm, '');
+  const parts = clean.split(/(?<=[.!?…:])\s+|\n+/)
+    .map((x) => x.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').replace(/\s+/g, ' ').trim())
+    .filter((x) => /\p{L}{2}/u.test(x));
+  const last = parts.at(-1) ?? '';
+  return /[.!?…:]$/.test(last) || last.length >= 40 || parts.length < 2 ? last : parts.at(-2);
+}
+function setSay(d, text, think = false) {
+  const live = d._live;
+  if (!live || !text || text === live.said) return;
+  const grows = live.said && text.startsWith(live.said) && live.say.firstChild;
+  live.said = text;
+  if (grows) { live.say.firstChild.textContent = text; return; }
+  live.say.replaceChildren(el('span', `lb-t${think ? ' think' : ''}`, text));  // a new sentence comes in
+}
 function paintPhase(d) {
   if (!d._live) return;
   const waiting = d._tl.querySelector(':scope > .ask.waiting');
@@ -1760,6 +1841,7 @@ async function openPage(name) {
       connHost,
       el('div', 's-label', 'to urządzenie'),
       group(
+        item(ICON.eye, 'Widok rozmowy', () => viewSheet(), { sub: `${CHAT_VIEWS[chatView()].name} — ${CHAT_VIEWS[chatView()].sub}` }),
         item(ICON.shield, 'Token', () => { shown = !shown; tokCode.textContent = shown ? token : '•'.repeat(24); }, { right: tokCode }),
         item(ICON.copy, 'Kopiuj token', () => clip(token)),
         item(ICON.share, 'Zaloguj inne urządzenie', async () => {
