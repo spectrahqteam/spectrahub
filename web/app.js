@@ -1445,15 +1445,16 @@ async function home(section = 'chat') {
     kv.append(el('span', null, 'system'), el('b', null, d.os), el('span', null, 'działa od'), el('b', null, `${days} dni ${hours} godz`),
       el('span', null, 'obciążenie'), el('b', null, d.load.join(' · ')), el('span', null, 'procesory'), el('b', null, String(d.cpus)), el('span', null, 'SpectraHub'), el('b', null, d.version));
     card.append(kv, el('small', 'u-at', `pomiar ${new Date(d.at).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`));
+    body.append(group(item(ICON.folder, 'Pliki serwera', () => fsPage('/'), { sub: 'cała zawartość dysku, od / w dół — tylko podgląd', right: svgIcon(ICON.chevron) })));
     body.append(group(item(ICON.plus, 'Dodaj serwer', () => toast('w przygotowaniu — wersja 0.5.0'), { sub: 'dostęp do innych serwerów: dodasz go tutaj (0.5.0)' }),
       item('<path d="m5 7 5 5-5 5M12 17h7"/>', 'Terminal tego serwera', () => openPage('shell'), { sub: 'tylko odczyt' })));
   } else if (homeName === 'agents') {
-    body.append(el('p', 'home-sub', 'Agenci znalezieni na tym serwerze. Każdy pracuje według własnych zasad.'));
+    body.append(el('p', 'home-sub', 'Agenci znalezieni na tym serwerze. Dotknij agenta, żeby zobaczyć jego pliki: tożsamość, instrukcje, konfigurację, skille i pamięć.'));
     const host = el('div');
     body.append(host, newBtn('Nowa sesja z agentami'));
     await scanInto(host);
     host.replaceChildren(group(...agents.map((a) => {
-      const r = item(logo(a.id), a.label, () => {}, { sub: a.ready ? [a.version, a.agent && `@${a.agent}`, a.via].filter(Boolean).join(' · ') : a.installed ? a.note ?? 'niedostępny' : 'nie znaleziono', right: el('span', `dotx ${a.ready ? 'ok' : a.installed ? 'warn' : ''}`) });
+      const r = item(logo(a.id), a.label, () => (a.installed ? agentFilesPage(a.id) : toast('tego agenta nie ma na serwerze')), { sub: a.ready ? [a.version, a.agent && `@${a.agent}`, a.via].filter(Boolean).join(' · ') : a.installed ? a.note ?? 'niedostępny' : 'nie znaleziono', right: agentRight(a) });
       r.style.setProperty('--c', color(a.id));
       return r;
     })));
@@ -1492,7 +1493,7 @@ async function openPage(name) {
     again.type = 'button';
     again.addEventListener('click', async () => { await scanInto(host, true); drawAgents(); });
     const drawAgents = () => host.replaceChildren(group(...agents.map((a) => {
-      const r = item(logo(a.id), a.label, () => {}, { sub: a.ready ? [a.version, a.agent && `@${a.agent}`, a.via].filter(Boolean).join(' · ') : a.installed ? a.note ?? 'niedostępny' : 'nie znaleziono', right: el('span', `dotx ${a.ready ? 'ok' : a.installed ? 'warn' : ''}`) });
+      const r = item(logo(a.id), a.label, () => (a.installed ? agentFilesPage(a.id) : toast('tego agenta nie ma na serwerze')), { sub: a.ready ? [a.version, a.agent && `@${a.agent}`, a.via].filter(Boolean).join(' · ') : a.installed ? a.note ?? 'niedostępny' : 'nie znaleziono', right: agentRight(a) });
       r.style.setProperty('--c', color(a.id));
       return r;
     })));
@@ -1618,6 +1619,12 @@ function connSheet(id, host) {
     return [el('div', 's-label', 'logowanie'), group(...modes), el('div', 's-label', 'klucz API'), group(...keys), f,
       el('p', 's-note', 'Klucz zostaje na serwerze (plik z prawami 600 w katalogu SpectraHub) i nigdy nie wraca do przeglądarki. Agent dostaje go tylko na czas odpowiedzi; jego własnej konfiguracji SpectraHub nie zmienia.')];
   });
+}
+
+function agentRight(a) {
+  const right = el('span', 'af-right');
+  right.append(el('span', `dotx ${a.ready ? 'ok' : a.installed ? 'warn' : ''}`), svgIcon(ICON.chevron));
+  return right;
 }
 
 // ---------- shell (read-only, allowlisted on the server) ----------

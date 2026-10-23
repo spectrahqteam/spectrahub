@@ -13,6 +13,8 @@ import { sessionUsage } from './usage.js';
 import { connections, saveKey, setMode } from './connections.js';
 import * as github from './github.js';
 import * as gmail from './gmail.js';
+import * as fsview from './fsview.js';
+import { agentFiles, saveAgentFile } from './agentfiles.js';
 import {
   attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, recentFiles, runs, saveUpload,
   send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession,
@@ -265,6 +267,27 @@ async function terminalRoute(req, res, url, config) {
     const r = conn[2] ? saveKey(dir, conn[1], b.key) : setMode(dir, config, conn[1], b.mode);
     return json(r.error ? 400 : 200, r);
   }
+  // The server's files, read only, and each agent's own files, which can also be edited.
+  const fsCall = async (fn) => { try { return json(200, await fn()); } catch (e) { return json(e instanceof fsview.FsError ? e.status : 500, { error: e instanceof fsview.FsError ? e.message : 'błąd serwera' }); } };
+  if (url.pathname === '/api/fs/list' && req.method === 'GET') return fsCall(() => fsview.list(url.searchParams.get('path') || '/'));
+  if (url.pathname === '/api/fs/read' && req.method === 'GET') return fsCall(() => fsview.read(url.searchParams.get('path'), { reveal: url.searchParams.has('reveal') }));
+  if (url.pathname === '/api/fs/raw' && req.method === 'GET') {
+    try {
+      const f = fsview.raw(url.searchParams.get('path'), { reveal: url.searchParams.has('reveal') });
+      const inline = f.type && !url.searchParams.has('download');
+      res.writeHead(200, { 'Content-Type': inline ? f.type : 'application/octet-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+        'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+        'Content-Security-Policy': "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'" });
+      return res.end(f.data);
+    } catch (e) { return json(e instanceof fsview.FsError ? e.status : 500, { error: e.message }); }
+  }
+  const af = /^\/api\/agents\/(\w+)\/(files?)$/.exec(url.pathname);
+  if (af && af[2] === 'files' && req.method === 'GET') return fsCall(() => agentFiles(af[1]));
+  if (af && af[2] === 'file' && req.method === 'PUT') {
+    let b = {};
+    try { b = JSON.parse(await readBody(req, 1.2 * 1024 * 1024)); } catch { return send(res, 400, 'bad request'); }
+    return fsCall(() => saveAgentFile(dir, af[1], b));
+  }
   if (url.pathname.startsWith('/api/github')) return githubRoute(req, res, url, dir, json);
   if (url.pathname.startsWith('/api/gmail')) return gmailRoute(req, res, url, dir, json);
   if (url.pathname.startsWith('/api/projects')) return projectRoute(req, res, url, { ...config, dir }, json);
@@ -413,7 +436,7 @@ export function createServer(config) {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
     }
-    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|github(\/|$)|gmail(\/|$)|fs\/dirs$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
+    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|github(\/|$)|gmail(\/|$)|fs\/(dirs|list|read|raw)$|agents\/\w+\/files?$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
     return serveStatic(res, url.pathname);
   });

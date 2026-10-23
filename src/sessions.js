@@ -212,7 +212,7 @@ export function attachFile(config, id, { path, from = 'agent' }) {
   let st;
   try { st = statSync(path); } catch { return { error: 'no such file', code: 404 }; }
   if (!st.isFile()) return { error: 'not a file', code: 400 };
-  const who = s.agents[from] ? from : 'agent';
+  const who = from === 'you' || s.agents[from] ? from : 'agent';  // the owner hands files over too
   const f = track(s, path, who);
   const reply = [...s.log].reverse().find((e) => e.who === who && e.status === 'running');
   if (reply) addReplyFile(s, reply, f);

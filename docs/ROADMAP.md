@@ -25,7 +25,8 @@
 
 ## 0.4.0 — files
 - [ ] terminal session per host (PTY), commands beyond the read-only list behind approvals
-- [ ] file tree + preview with allowlist/denylist
+- [x] the server's files, read only: the whole disk from /, previews of code, Markdown and pictures; secrets only after a second yes
+- [x] each agent's own files (identity, instructions, config, skills, memory, projects): view, edit with backups, hand to a conversation
 - [x] GitHub panel, read only: several accounts with their own tokens (private repos too) — code, README, commits, PRs, issues, branches
 - [x] Gmail, read only: several mailboxes with app passwords over IMAP — folders, labels, Gmail search, mail in a sandbox, attachments; nothing marked as read
 
