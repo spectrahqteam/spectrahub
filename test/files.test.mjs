@@ -10,6 +10,7 @@ const dir = join(root, 'hub');
 const home = join(root, 'home');
 const project = join(root, 'proj');
 const team = join(root, 'team');
+const ola = join(root, 'ola');  // another user's home on the same server
 let server;
 let base;
 let auth;
@@ -17,6 +18,14 @@ let auth;
 before(async () => {
   for (const d of [dir, join(home, '.claude', 'skills', 'raport'), join(home, '.claude', 'projects', '-proj', 'memory'), project, team, join(root, 'bin')]) mkdirSync(d, { recursive: true });
   writeFileSync(join(team, 'charlie.md'), '# Charlie\nTożsamość agenta.\n');
+  mkdirSync(join(team, 'rules'), { recursive: true });
+  writeFileSync(join(team, 'rules', 'team.md'), 'zasady zespołu\n');
+  writeFileSync(join(team, 'GLOSSARY.md'), 'słownik\n');
+  writeFileSync(join(project, 'notes.md'), 'see @rules/team.md\n');
+  for (const d of [join(ola, '.openclaw', 'workspace'), join(ola, '.local', 'bin')]) mkdirSync(d, { recursive: true });
+  writeFileSync(join(ola, '.openclaw', 'workspace', 'SOUL.md'), 'dusza agenta Oli\n');
+  writeFileSync(join(ola, '.local', 'bin', 'codex'), `#!${process.execPath}\nconsole.log('codex-cli 0.0.1 (fake)')\n`);
+  chmodSync(join(ola, '.local', 'bin', 'codex'), 0o755);
   symlinkSync(join(team, 'charlie.md'), join(home, '.claude', 'CLAUDE.md'));
   writeFileSync(join(home, '.claude', 'settings.json'), '{"model":"opus"}\n');
   writeFileSync(join(home, '.claude', '.credentials.json'), '{"claudeAiOauth":{"accessToken":"sekret"}}');
@@ -29,6 +38,7 @@ before(async () => {
   writeFileSync(join(root, 'pixel.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   process.env.PATH = join(root, 'bin');
   process.env.HOME = home;
+  process.env.SPECTRAHUB_SCAN_HOMES = `${home}:${ola}`;
   delete process.env.CLAUDE_CONFIG_DIR;
   const { start } = await import('../src/server.js');
   const { ensureToken } = await import('../src/terminal.js');
@@ -93,6 +103,20 @@ test('an agent\'s own files are found, grouped, and can be edited safely', async
   assert.equal((await save({ path: join(home, '.claude', '.credentials.json'), text: '{}' })).status, 403, 'credentials are never edited here');
   assert.equal((await save({ path: '/etc/hostname', text: 'x' })).status, 403, 'only files the scanner found');
   assert.ok(existsSync(settings) && readFileSync(settings, 'utf8') === '{"model":"opus"}\n');
+});
+
+test('the scanner finds agents and their files wherever they were put', async () => {
+  const { agents } = await (await api('/api/agents?fresh')).json();
+  assert.equal(agents.find((a) => a.id === 'codex').installed, true, 'an agent in ~/.local/bin, outside PATH');
+  const oc = await (await api('/api/agents/openclaw/files')).json();
+  const soul = oc.files.find((f) => f.name === 'SOUL.md');
+  assert.equal(soul.path, join(ola, '.openclaw', 'workspace', 'SOUL.md'), "OpenClaw's default workspace, with no config at all");
+  assert.match(soul.label, /użytkownik ola/, 'files of another user say whose they are');
+
+  writeFileSync(join(team, 'charlie.md'), '# Charlie\nZasady: @rules/team.md oraz [słownik](GLOSSARY.md), a `https://x.y/a.md` to nie plik.\n');
+  const cl = await (await api('/api/agents/claude/files')).json();
+  const linked = cl.files.filter((f) => f.group === 'linked').map((f) => [f.path, f.label]);
+  assert.deepEqual(linked, [[join(team, 'rules', 'team.md'), 'wskazany w CLAUDE.md'], [join(team, 'GLOSSARY.md'), 'wskazany w CLAUDE.md']], 'files the instructions point to, relative to the instruction file');
 });
 
 test('a file can be handed to a conversation as the owner\'s attachment', async () => {

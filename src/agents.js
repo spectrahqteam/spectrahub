@@ -2,7 +2,7 @@
 // Every adapter keeps the runtime's own session, so the next turn continues the same conversation.
 import { spawn, execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, writeFileSync, rmSync } from 'node:fs';
+import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
@@ -20,8 +20,38 @@ const RUNTIMES = [
     adapter: true },
 ];
 
+// Homes to look in: this user's, root's and every one under /home — agents often belong to a
+// regular user while SpectraHub runs as root, or the other way round. SPECTRAHUB_SCAN_HOMES
+// (folders separated by ":") replaces the list for unusual layouts.
+export function userHomes() {
+  const set = process.env.SPECTRAHUB_SCAN_HOMES;
+  let list = set ? set.split(':') : [homedir(), '/root'];
+  if (!set) { try { list = list.concat(readdirSync('/home').map((n) => join('/home', n))); } catch { /* no /home */ } }
+  const seen = new Set();
+  return list.filter((h) => {
+    try {
+      const r = realpathSync(h);
+      if (!statSync(r).isDirectory() || seen.has(r)) return false;
+      seen.add(r);
+      return true;
+    } catch { return false; }
+  });
+}
+
+// Where agents get installed besides PATH (a service starts with a short one): per-user
+// installers (Claude Code in ~/.local/bin, Codex standalone), Node version managers, snaps.
+function binDirs() {
+  const dirs = (process.env.PATH ?? '').split(delimiter);
+  for (const h of userHomes()) {
+    dirs.push(...['.local/bin', '.npm-global/bin', '.bun/bin', '.volta/bin', '.claude/local', '.codex/packages/standalone/current/bin', '.local/share/pnpm', 'bin'].map((d) => join(h, d)));
+    try { for (const v of readdirSync(join(h, '.nvm/versions/node')).sort().reverse()) dirs.push(join(h, '.nvm/versions/node', v, 'bin')); } catch { /* no nvm */ }
+  }
+  if (!process.env.SPECTRAHUB_SCAN_HOMES) dirs.push('/usr/local/bin', '/usr/bin', '/snap/bin');
+  return [...new Set(dirs.filter(Boolean))];
+}
+
 function which(bin) {
-  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+  for (const dir of binDirs()) {
     const p = join(dir, bin);
     try { accessSync(p, constants.X_OK); return p; } catch { /* next */ }
   }
@@ -594,6 +624,7 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
   }
   const l = rt.launch;
   const env = { ...process.env, ...(l?.envFile ? readEnvFile(l.envFile) : {}), ...(l?.env ?? {}), ...extra, NO_COLOR: '1' };
+  if (rt.path && !l) env.PATH = [dirname(rt.path), env.PATH].filter(Boolean).join(delimiter);  // found outside PATH: its node may sit next to it
   if (rt.id === 'dsh') env.DSH_PERMISSION_MODE = { read: 'read-only', write: 'workspace-write', full: 'danger-full-access' }[perm] ?? 'workspace-write';
   if (rt.id === 'openclaw' && (perm === 'read' || perm === 'write')) Object.assign(env, openclawLimits(perm));
   for (const k of drop) delete env[k];  // e.g. an API key that must not override the subscription

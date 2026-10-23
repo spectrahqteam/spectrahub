@@ -48,6 +48,7 @@ before(async () => {
   writeFileSync(join(bin, 'claude'), fakeClaude);
   chmodSync(join(bin, 'claude'), 0o755);
   process.env.PATH = bin;  // only the fake runtime is visible
+  process.env.SPECTRAHUB_SCAN_HOMES = dir;  // and no agent from this server's homes
   const { start } = await import('../src/server.js');
   const { ensureToken } = await import('../src/terminal.js');
   token = ensureToken(dir);

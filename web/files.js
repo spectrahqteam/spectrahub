@@ -22,6 +22,7 @@ const AF_GROUPS = {
   skills: ['Skille, komendy i subagenci', 'spark', 'czego agent się nauczył'],
   memory: ['Pamięć', 'brain', 'co agent zapamiętał'],
   workspace: ['Folder pracy', 'folder2', 'pliki, które leżą przy agencie'],
+  linked: ['Wskazane w instrukcjach', 'link', 'pliki, do których odsyłają instrukcje agenta'],
   projects: ['Projekty', 'dir', 'pliki agenta w projektach, w których pracował'],
   secret: ['Dane logowania', 'lock', 'zablokowane — pokazują się dopiero po potwierdzeniu'],
 };
