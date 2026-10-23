@@ -41,6 +41,15 @@ test('stylesheet is served', async () => {
   assert.match(res.headers.get('content-type'), /text\/css/);
 });
 
+test('terminal renderer assets are served locally with script and style MIME types', async () => {
+  for (const [path, type] of [['/vendor/xterm.js', 'javascript'], ['/vendor/addon-fit.js', 'javascript'], ['/vendor/xterm.css', 'css']]) {
+    const res = await fetch(base + path);
+    assert.equal(res.status, 200, path);
+    assert.ok(res.headers.get('content-type').includes(type));
+    assert.ok((await res.text()).length > 1000);
+  }
+});
+
 test('unknown paths return 404', async () => {
   const res = await fetch(`${base}/nope`);
   assert.equal(res.status, 404);

@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { accessSync, closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync, writeFileSync, rmSync } from 'node:fs';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { rpcTurn } from './agent-rpc.js';
 
 // What the scanner looks for, on any server: commands on PATH, then any running systemd service
 // (system or user) whose program belongs to the runtime's npm package — recognised by package
@@ -173,6 +175,7 @@ async function doScan() {
       out.agent = await openclawAgent(path);
       if (!out.agent) { out.ready = false; out.note = 'nie podał swoich agentów'; }
     }
+    out.approvals = r.id === 'claude' ? (out.asks ? 'native' : 'turn') : r.id === 'openclaw' ? 'turn-and-native-exec' : 'native';
     if (!r.adapter) out.note = 'znaleziony, brak adaptera';
     return out;
   }));
@@ -346,6 +349,28 @@ function dshPatch(rt, model, effort) {
   const lines = ['- id: agent-default-model', '  name: "@deepseek-ai/dsh-agent-default-model"', '  config:', `    provider: ${prof.provider}`];
   if (model || prof.model) lines.push(`    model: ${model || prof.model}`);
   if (effort || prof.effort) lines.push(`    reasoningEffort: ${effort || prof.effort}`);
+  writeFileSync(file, lines.join('\n') + '\n', { mode: 0o600 });
+  return file;
+}
+
+// Keep the owner's headless composition and change only its transport. The ACP route and
+// approval service are composed on top for this process; no installed profile is rewritten.
+export function dshAcpPatch(profile, model, effort, perm = 'read') {
+  const dir = join(tmpdir(), 'spectrahub-dsh');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = join(dir, `${randomUUID()}-acp.yml`);
+  const config = { ...(profile.provider ? { provider: profile.provider } : {}), ...(model || profile.model ? { model: model || profile.model } : {}) };
+  const mode = { read: 'read-only', write: 'workspace-write', full: 'danger-full-access' }[perm] ?? 'read-only';
+  const presets = Object.fromEntries(['read-only', 'workspace-write', 'danger-full-access'].map((sandbox) => [sandbox, { sandbox, approval: 'ask' }]));
+  const lines = [
+    '- id: headless-startup', '  disabled: true', '- id: headless-runner', '  disabled: true',
+    '- id: session-title-llm', '  disabled: true', '- id: approval', '  config:', '    policy: ask',
+    '- id: permission', `  config: ${JSON.stringify({ presets })}`,
+    '- insert:', '    - id: spectrahub-acp-startup', '      name: "@deepseek-ai/dsh-acp-app"',
+    '    - id: spectrahub-permissions', `      name: ${JSON.stringify(fileURLToPath(new URL('./dsh-permissions.js', import.meta.url)))}`, `      config: ${JSON.stringify({ mode })}`,
+    '    - id: spectrahub-acp', '      name: "@deepseek-ai/dsh-acp"', '      inject: [acpAppStartup, spectrahubPermissions]', `      config: ${JSON.stringify(config)}`,
+  ];
+  if (model || effort) lines.push('- id: agent-default-model', `  config: ${JSON.stringify({ ...config, ...(effort ? { reasoningEffort: effort } : {}) })}`);
   writeFileSync(file, lines.join('\n') + '\n', { mode: 0o600 });
   return file;
 }
@@ -549,16 +574,8 @@ export function codexLimits(thread) {
 
 // Codex: messages, commands with their output and exit code, file changes, plan and reasoning.
 const codex = {
-  argv(ref, started, o = {}) {
-    const images = (o.images ?? []).flatMap((f) => ['-i', f]);  // before the other flags: -i takes several values
-    const perm = PERMS.includes(o.perm) ? o.perm : 'full';
-    const sandbox = perm === 'full' ? ['--dangerously-bypass-approvals-and-sandbox']
-      : ['-c', `sandbox_mode="${perm === 'read' ? 'read-only' : 'workspace-write'}"`, '-c', 'approval_policy="never"'];
-    const common = [...images, '--json', ...sandbox, '--skip-git-repo-check',
-      ...(o.model ? ['-m', o.model] : []), ...(o.effort ? ['-c', `model_reasoning_effort="${o.effort}"`] : [])];
-    return started ? ['exec', 'resume', ...common, ref, '-'] : ['exec', ...common, '-'];
-  },
-  stdin: true,
+  // Historical exec event normalization is retained for recorded events and adapter tests.
+  // Live turns exclusively use app-server; there is no non-interactive bypass fallback.
   line(d, emit) {
     const it = d.item;
     if (d.type === 'thread.started') emit({ type: 'ref', ref: d.thread_id });
@@ -676,7 +693,8 @@ const openclaw = {
 const OPENCLAW_DENY = {
   read: ['group:runtime', 'write', 'edit', 'apply_patch', 'group:automation', 'group:messaging', 'group:nodes', 'group:ui', 'group:plugins',
     'sessions_send', 'sessions_spawn', 'subagents', 'image_generate', 'music_generate', 'video_generate'],
-  write: ['group:runtime', 'group:automation', 'group:messaging', 'group:nodes', 'group:plugins', 'sessions_send', 'sessions_spawn', 'subagents'],
+  write: ['group:runtime', 'group:automation', 'group:messaging', 'group:nodes', 'group:ui', 'group:plugins', 'sessions_send', 'sessions_spawn', 'subagents',
+    'image_generate', 'music_generate', 'video_generate'],
 };
 function openclawLimits(perm) {
   const main = openclawConfigPath();
@@ -719,7 +737,73 @@ export function newRef(id) {
 }
 
 // Runs one turn. `emit` receives {type: text|step|step-end|usage|limits|error|ref|done}; the returned function stops it.
-export function turn(rt, { ref, started, prompt, cwd, model, effort, images, perm, ownCwd = false, env: extra = {}, drop = [] }, emit) {
+export function turn(rt, options, emit) {
+  const { ref, started, prompt, cwd, model, effort, images, perm = 'read', ownCwd = false, env: extra = {}, drop = [] } = options;
+  // OpenClaw's gateway exposes native exec prompts but does not constrain every plugin/tool
+  // per invocation. The owner explicitly authorizes the selected scope for ONE turn first.
+  // Older Claude builds likewise have no native prompt protocol. Denial never starts a process.
+  if ((rt.id === 'openclaw' || (rt.id === 'claude' && rt.asks === false)) && perm !== 'read' && !options.scopeApproved) {
+    const id = `scope:${randomUUID()}`;
+    let inner = null, settled = false;
+    const stop = () => { if (inner) inner(); else if (!settled) { settled = true; emit({ type: 'error', s: 'przerwano przed zgodą' }); emit({ type: 'done' }); } };
+    stop.answer = (answerId, decision, answers) => {
+      if (inner) return inner.answer?.(answerId, decision, answers) ?? false;
+      if (settled || answerId !== id || !['allow', 'deny'].includes(decision)) return false;
+      settled = true;
+      if (decision === 'deny') { emit({ type: 'error', s: 'Użytkownik odmówił uruchomienia tury.' }); emit({ type: 'done' }); }
+      else inner = turn(rt, { ...options, scopeApproved: true }, emit);
+      return true;
+    };
+    queueMicrotask(() => { if (!settled) emit({ type: 'ask', id, kind: 'permission', tool: rt.label ?? rt.id,
+      title: perm === 'full' ? 'Uruchomić turę z pełnym dostępem?' : 'Zezwolić na zapis w katalogu pracy?',
+      description: `Zgoda dotyczy jednej tury w ${cwd}. ${perm === 'full' ? 'Runtime może wykonywać polecenia, zmieniać pliki i używać swoich integracji.' : 'Runtime może zmieniać pliki w katalogu pracy; powłoka pozostaje wyłączona.'} ${rt.id === 'openclaw' ? 'Pytania o polecenia, które zgłosi brama OpenClaw, pojawią się osobno. Pozostałe narzędzia nie mają osobnych potwierdzeń w tym trybie.' : 'Ta wersja Claude Code nie obsługuje osobnych pytań o narzędzia.'}`,
+      path: cwd, always: false, scope: 'turn' }); });
+    return stop;
+  }
+  if (rt.id === 'codex' || rt.id === 'dsh' || (rt.id === 'openclaw' && perm === 'full')) {
+    let inner = null, cancelled = false, ended = false;
+    const nativeEmit = (e) => { if (ended) return; if (e.type === 'done') ended = true; emit(e); };
+    const stop = () => { cancelled = true; if (inner) inner(); else { nativeEmit({ type: 'error', s: 'przerwano' }); nativeEmit({ type: 'done' }); } };
+    stop.answer = (...args) => inner?.answer?.(...args) ?? false;
+    const launch = async () => {
+      const l = rt.launch;
+      const env = { ...process.env, ...(l?.envFile ? readEnvFile(l.envFile) : {}), ...(l?.env ?? {}), ...extra, NO_COLOR: '1' };
+      if (rt.path && !l) env.PATH = [dirname(rt.path), env.PATH].filter(Boolean).join(delimiter);
+      for (const k of drop) delete env[k];
+      let args, patch, nativeModel = model;
+      if (rt.id === 'codex') args = ['app-server', '--listen', 'stdio://', '-c', 'approval_policy="on-request"', '-c', 'sandbox_mode="read-only"'];
+      else if (rt.id === 'openclaw') args = ['acp'];
+      else {
+        const profile = await dshProfile(rt);
+        if (cancelled) return;
+        patch = dshAcpPatch(profile, model, effort, perm);
+        if (model && profile.provider) nativeModel = JSON.stringify([profile.provider, model]);
+        // Changes start outside the sandbox and must pass the runtime's native approval seam.
+        env.DSH_PERMISSION_MODE = 'read-only';
+        args = ['--profile', 'headless', '--patch', patch];
+      }
+      if (cancelled) { if (patch) rmSync(patch, { force: true }); return; }
+      inner = rpcTurn({ bin: l?.node ?? rt.path, args: l ? [l.script, ...args] : args, cwd: ownCwd ? cwd : l?.cwd ?? cwd, env,
+        protocol: rt.id === 'codex' ? 'codex' : 'acp', ref, started, prompt, model: nativeModel, effort, images, perm,
+        agent: rt.id === 'openclaw' ? rt.agent : null,
+        configure: rt.id === 'openclaw' ? () => new Promise((resolve, reject) => {
+          // A dedicated gateway session, never the agent's default/global settings. The bridge
+          // relays every exec request and no persistent allowlist grant is ever sent back.
+          const params = { key: `agent:${rt.agent}:${ref}`, execAsk: 'always', execSecurity: 'allowlist', ...(model ? { model } : {}) };
+          execFile(rt.path, ['gateway', 'call', 'sessions.patch', '--json', '--params', JSON.stringify(params)], { env, timeout: 15000, maxBuffer: 1024 * 1024 }, (err) => {
+            if (err) reject(new Error('OpenClaw: nie udało się ustawić obowiązkowych pytań o polecenia. Tura nie została uruchomiona.'));
+            else resolve();
+          });
+        }) : null,
+        cleanup: () => { if (patch) rmSync(patch, { force: true }); } }, nativeEmit);
+    };
+    launch().catch((e) => { nativeEmit({ type: 'error', s: String(e.message ?? e) }); nativeEmit({ type: 'done' }); });
+    return stop;
+  }
+  return legacyTurn(rt, options, emit);
+}
+
+function legacyTurn(rt, { ref, started, prompt, cwd, model, effort, images, perm, ownCwd = false, env: extra = {}, drop = [] }, emit) {
   const a = Object.create(ADAPTERS[rt.id]);  // per-run state (e.g. dsh: did text already stream)
   let file = null;
   if (rt.id === 'openclaw') {

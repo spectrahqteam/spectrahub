@@ -1,43 +1,31 @@
 # Roadmap
 
-## 0.1.0 — scaffold (current)
-- [x] repository, license, principles
-- [x] static shell with the launcher screen (`web/`)
-- [ ] screenshots in README
+## 0.3.0 — interactive operations and recoverable conversations
 
-## 0.2.0 — shell that runs (done)
-- [x] Node server serving `web/` + `/health`
-- [x] install path: `npm i -g`, `spectrahub init`, `spectrahub service install`
-- [x] smoke tests (`npm test`)
-- [ ] CI workflow in the repository
-- [x] owner account: one token, one-time login links (state in files, see D7)
+- [x] CLI installation, owner sign-in, systemd service and health check
+- [x] Shared conversations with Claude Code, Codex, OpenClaw and DeepSeek Harness
+- [x] Streamed tools, output, files, usage, status, questions and polls
+- [x] Native Codex app-server and DSH ACP approval transports
+- [x] OpenClaw turn-scope approval and native exec requests through ACP
+- [x] Detached conversation workers and recovery after HTTP-service restart
+- [x] Pending approval recovery without resubmitting the original prompt
+- [x] Real PTY, interactive input, resize, control keys and browser reconnect
+- [x] Explicit approval before starting an interactive shell
+- [x] Multiple SSH hosts, host metrics and selected service states
+- [x] Read-only server files, agent file editing with version history
+- [x] Read-only GitHub and Gmail connections
+- [x] Private installation state excluded from source and npm payload
+- [x] Installation and upgrade instructions include runtime requirements
 
-## 0.3.0 — terminal and chat
-- [x] read-only terminal: exact command allowlist, SSE stream, Ubuntu-like prompt, owner token
-- [x] workspace: rail + panel + window (rail fixed on phones, panel slides over)
-- [x] agent scanner (Claude Code, Codex, OpenClaw, DeepSeek Harness) — PATH, running systemd units, install folders
-- [x] "start sesja": pick agents, each gets a new runtime session, one shared conversation
-- [x] chat in the terminal window: `@agent` picks and keeps the recipient, `@all`, `/stop`, streamed replies
-- [x] live view of the work: every tool with its output and exit code, diffs, thinking, plan, tokens and cost
-- [x] runtime adapters, all four end to end: Claude Code, Codex, OpenClaw, DeepSeek Harness
-- [x] approval cards in the chat for Claude Code: allow once, for this session, or deny; its questions with options
-- [ ] approval cards for the other runtimes (they offer no prompt protocol in the way SpectraHub runs them)
-- [x] permission level per agent and session; sign-in per agent (subscription, API key, automatic)
-- [x] drafts kept per session; polls answered by the agents
-- [ ] work survives a server restart (today a running reply is marked as interrupted)
+## Further work
 
-## 0.4.0 — files
-- [ ] terminal session per host (PTY), commands beyond the read-only list behind approvals
-- [x] the server's files, read only: the whole disk from /, previews of code, Markdown and pictures; secrets only after a second yes
-- [x] each agent's own files (identity, instructions, config, skills, memory, projects): view, edit with backups, hand to a conversation
-- [x] GitHub panel, read only: several accounts with their own tokens (private repos too) — code, README, commits, PRs, issues, branches
-- [x] Gmail, read only: several mailboxes with app passwords over IMAP — folders, labels, Gmail search, mail in a sandbox, attachments; nothing marked as read
+- [ ] CI workflow for the complete test and release checks
+- [ ] Explicit recovery workflow after whole-machine reboot beyond continuing a saved runtime session
+- [ ] Per-tool approvals for every OpenClaw gateway integration (current broader scope is explicit)
+- [ ] Remote agent discovery and remote filesystem browser
+- [ ] Host map view
+- [ ] Screenshots in the README
+- [ ] Declarative automations and reports
 
-## 0.5.0 — servers
-- [ ] host cards, disk/RAM/uptime, service states
-- [ ] map view
-
-## Later
-- automations and reports
-- plugin system (declarative, no arbitrary code)
-- multi-host
+The 0.3.0 release remains under active development. Passing synthetic runtime tests
+is not a guarantee that every installed third-party runtime version supports the same protocol.

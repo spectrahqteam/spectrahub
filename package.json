@@ -1,6 +1,6 @@
 {
   "name": "spectrahub",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Self-hosted open-source command center for your own VPS: chat, terminal, files, servers, agents.",
   "license": "MIT",
   "type": "module",
@@ -10,17 +10,25 @@
   "scripts": {
     "start": "node bin/spectrahub.js serve",
     "doctor": "node bin/spectrahub.js doctor",
-    "test": "node --test"
+    "test": "node --test",
+    "check:release": "node scripts/check-release.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "files": [
-    "bin/",
-    "src/",
-    "web/",
-    "systemd/",
-    "docs/",
+    "bin/*.js",
+    "bin/*.py",
+    "src/*.js",
+    "web/*.js",
+    "web/*.css",
+    "web/*.html",
+    "web/*.png",
+    "web/*.webmanifest",
+    "docs/INSTALL.md",
+    "docs/ARCHITECTURE.md",
+    "docs/ROADMAP.md",
+    "docs/DECISIONS.md",
     "README.md",
     "LICENSE"
   ],
@@ -39,5 +47,9 @@
   "homepage": "https://github.com/spectrahqteam/spectrahub",
   "bugs": {
     "url": "https://github.com/spectrahqteam/spectrahub/issues"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0"
   }
 }

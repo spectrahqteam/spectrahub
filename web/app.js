@@ -909,7 +909,7 @@ function upsertAsk(d, it) {
   if (it.status !== 'waiting') {
     const text = it.kind === 'question'
       ? (it.status === 'answered' ? `Odpowiedziano: ${Object.values(it.answers ?? {}).join(' · ')}` : it.status === 'denied' ? 'Pytanie pominięte' : 'Pytanie bez odpowiedzi')
-      : `${{ allowed: 'Zezwolono raz', always: 'Zezwolono w tej sesji', denied: 'Odmówiono', expired: 'Bez odpowiedzi' }[it.status] ?? it.status}: ${it.tool}${it.title ? ` · ${it.title}` : ''}`;
+      : `${{ allowed: it.scope === 'turn' ? 'Zezwolono na tę turę' : 'Zezwolono raz', always: 'Zezwolono w tej sesji', denied: 'Odmówiono', expired: 'Bez odpowiedzi' }[it.status] ?? it.status}: ${it.tool}${it.title ? ` · ${it.title}` : ''}`;
     card.replaceChildren(el('span', 'ask-ic', it.status === 'denied' || it.status === 'expired' ? '✗' : '✓'), el('span', 'ask-done', text));
   } else if (it.kind === 'question') {
     const picked = new Map();
@@ -958,7 +958,7 @@ function upsertAsk(d, it) {
     if (it.path) nodes.push(el('small', 'ask-path', `dotyczy: ${it.path}`));
     const row = el('div', 'ask-btns');
     const btn = (label, decision, cls = 'tb text') => { const b = el('button', cls, label); b.type = 'button'; b.addEventListener('click', () => send(decision)); return b; };
-    row.append(btn('Odmów', 'deny'), ...(it.always ? [btn('Zawsze w tej sesji', 'always')] : []), btn('Zezwól raz', 'allow', 'tb text primary'));
+    row.append(btn('Odmów', 'deny'), ...(it.always ? [btn('Zawsze w tej sesji', 'always')] : []), btn(it.scope === 'turn' ? 'Zezwól na tę turę' : 'Zezwól raz', 'allow', 'tb text primary'));
     card.replaceChildren(...nodes, row);
   }
   paintPhase(d);
@@ -1668,6 +1668,7 @@ $('moreBtn').addEventListener('click', () => {
 const shellOut = el('div');
 let pageName = null;
 function setView(v) {
+  if (typeof leaveInfrastructure === 'function') leaveInfrastructure();
   view = v;
   screen.classList.remove('as-home');
   cmd.hidden = v !== 'shell';
@@ -1747,6 +1748,7 @@ async function home(section = 'chat') {
     if (!sessions.length) cards.append(el('p', 's-note', 'Tu pojawią się Twoje ostatnie sesje.'));
     body.append(cards);
   } else if (homeName === 'vps') {
+    if (typeof hostsPage === 'function') return hostsPage();
     body.append(el('p', 'home-sub', 'Stan serwerów w jednym miejscu. Na razie ten, na którym działa SpectraHub.'));
     const card = el('div', 'u-card sys');
     body.append(card);
@@ -1783,7 +1785,7 @@ async function home(section = 'chat') {
     const { files } = r.ok ? await r.json() : { files: [] };
     body.append(files.length ? group(...files.map(({ session, title, file }) => item(file.type?.startsWith('image/') ? ICON.image : ICON.file, file.name, async () => { await openSession(session); openFile(file); },
       { sub: `${file.from === 'you' ? 'od Ciebie' : `od ${nameOf(file.from)}`} · ${title} · ${ago(file.at)}` }))) : el('p', 's-note', 'Nie ma jeszcze plików.'));
-    body.append(el('p', 's-note', 'Drzewo plików serwera z podglądem: wersja 0.4.0.'));
+    body.append(group(item(ICON.folder, 'Przeglądaj pliki serwera', () => fsPage('/'), { sub: 'drzewo katalogów i podgląd plików' })));
   } else if (homeName === 'studio') {
     const card = el('div', 'u-card');
     const h = el('div', 'u-head');
@@ -1799,7 +1801,7 @@ const SOON = {
 };
 async function openPage(name) {
   pageName = name;
-  if (name === 'shell') { setView('shell'); return; }
+  if (name === 'shell') { if (info && typeof terminalsPage === 'function') return terminalsPage(); setView('shell'); return; }
   if (name === 'github' && typeof githubPage === 'function') return githubPage();  // web/github.js
   if (name === 'gmail' && typeof gmailPage === 'function') return gmailPage();  // web/gmail.js
   setView('page');

@@ -1,0 +1,18 @@
+.infra-form{display:grid;gap:12px;margin:18px 0}
+.infra-field{display:grid;gap:6px;font-size:12px;color:var(--muted)}
+.infra-form input,.infra-form select{min-width:0;width:100%;box-sizing:border-box;background:#111;border:1px solid #333;border-radius:8px;padding:11px;color:var(--text,#eee);font:inherit}
+.infra-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.infra-actions .s-primary{width:auto;margin:0}
+.infra-hosts{display:grid;gap:14px;margin-top:20px}
+.infra-approval{border:1px solid #554232;border-radius:10px;padding:14px;margin:10px 0}
+.infra-approval:empty{display:none}
+.infra-approval .s-primary{margin:4px 8px 4px 0}
+.screen.as-terminal{overflow:hidden;padding-bottom:8px}
+.screen.as-terminal #out{height:100%;max-width:none}
+.screen.as-terminal .infrastructure{display:flex;flex-direction:column;height:100%;max-width:none;padding:0}
+.pty-surface{flex:1;min-height:160px;background:#080808;border:1px solid #242424;border-radius:8px;padding:8px;overflow:hidden}
+.pty-surface .xterm{height:100%}
+.pty-keys{flex-shrink:0;gap:5px}
+.pty-keys .s-primary{padding:7px 10px;font-size:12px;min-height:34px}
+.infrastructure .u-kv{overflow-wrap:anywhere}
+@media(max-width:600px){.infra-actions .s-primary{font-size:12px}.infra-approval{max-height:42dvh;overflow:auto}.pty-surface{padding:4px}.infra-field{font-size:13px}}

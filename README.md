@@ -5,7 +5,7 @@ Talk to your agents in one place, browse the server, watch it, keep every decisi
 
 SpectraHub runs on a single small VPS. No SaaS, no telemetry, no external account required.
 
-> Status: **0.2.0, in active development.** It installs and runs; much of the command center
+> Status: **0.3.0, in active development.** It installs and runs; much of the command center
 > works, some is still missing — see [docs/ROADMAP.md](docs/ROADMAP.md). Not production-ready.
 
 ## What it does today
@@ -14,7 +14,8 @@ SpectraHub runs on a single small VPS. No SaaS, no telemetry, no external accoun
   found on the server by a scanner. Several agents in one conversation, each keeping its own
   runtime session; replies stream with their steps, diffs, tokens and cost.
 - **Permissions and sign-in per agent** — read, write in the working folder, or full; Claude
-  Code asks in the chat for anything beyond its level (allow once, for the session, or deny).
+  Code, Codex and DSH relay native permission requests. OpenClaw asks for an explicit
+  turn scope, then relays native exec requests; integrations within that scope can act.
   Subscription, API key, or the key once the plan's limit runs out.
 - **Models** as each runtime offers them, read from the runtime itself.
 - **Polls** — a question with options; each agent picks one and says why.
@@ -22,7 +23,10 @@ SpectraHub runs on a single small VPS. No SaaS, no telemetry, no external accoun
   agent's own files (instructions, identity, config, skills, memory) to view, edit with a
   history of versions, and hand to a conversation.
 - **GitHub and Gmail**, read only, with your own tokens or app passwords.
-- **Server** — disk, memory, load and uptime; a terminal limited to a list of safe commands.
+- **Servers** — local and multiple SSH hosts, disk, memory, load, uptime and service status.
+- **Real terminals** — PTY, interactive programs, resize and control keys, after explicit shell approval.
+- **Recoverable conversations** — HTTP restarts reattach to the same worker, including pending
+  approvals; interrupted work is never automatically executed a second time.
 
 ## Principles
 
@@ -31,11 +35,11 @@ SpectraHub runs on a single small VPS. No SaaS, no telemetry, no external accoun
    their configuration; anything it adds (a model, a limit) is handed over for one run.
 3. **Secrets stay on the server.** Keys and tokens are never sent to the browser.
 4. **Local first.** No cloud dependency in the default path.
-5. **Readable over clever.** Plain HTML/CSS/JS, a small Node backend, no dependencies.
+5. **Readable over clever.** Plain HTML/CSS/JS, a small Node backend, and a locally served terminal renderer.
 
 ## Install
 
-Requires Node.js 20 or newer, on Linux.
+Requires Linux, Node.js 20+, Python 3 and an OpenSSH client. Remote monitoring needs Python 3 on the SSH host too.
 
 ```bash
 npm install -g github:spectrahqteam/spectrahub
@@ -53,8 +57,8 @@ spectrahub doctor    # checks the install, fails loudly
 ## Repository layout
 
 ```
-bin/          the `spectrahub` command: init, serve, service, login, doctor
-src/          server: agents, sessions, files, GitHub, Gmail, usage — no dependencies
+bin/          the `spectrahub` CLI and Python PTY bridge
+src/          server, private conversation workers, runtime adapters, hosts and PTY
 web/          the app in the browser: start screen, chat, files, terminal, settings
 test/         `npm test`
 docs/         install, architecture, roadmap, decisions

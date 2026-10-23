@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { cpus, freemem, homedir, hostname, loadavg, release, totalmem, type as osType, uptime } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { VERSION, paths, defaultDir, readConfig, writeConfig } from './config.js';
 import { authCookie, authorize, cookieToken, createPairing, redeemPairing, runLine, terminalInfo } from './terminal.js';
 import { models, scan } from './agents.js';
@@ -14,14 +15,17 @@ import { connections, saveKey, setMode } from './connections.js';
 import * as github from './github.js';
 import * as gmail from './gmail.js';
 import * as fsview from './fsview.js';
+import * as hosts from './hosts.js';
+import * as pty from './pty.js';
 import { agentFiles, history, saveAgentFile } from './agentfiles.js';
 import {
   attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, recentFiles, runs, saveUpload,
-  answer as answerAsk, send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession, vote as votePoll,
+  answer as answerAsk, recoverRuns, send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession, vote as votePoll,
 } from './sessions.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const WEB = join(ROOT, 'web');
+const require = createRequire(import.meta.url);
 const STARTED_AT = new Date();
 
 const TYPES = {
@@ -66,6 +70,15 @@ const decode = (s) => { try { return decodeURIComponent(s); } catch { return nul
 async function serveStatic(res, urlPath) {
   const path = decode(urlPath);
   if (path == null) return send(res, 400, 'bad request');
+  const vendor = {
+    '/vendor/xterm.js': '@xterm/xterm',
+    '/vendor/xterm.css': '@xterm/xterm/css/xterm.css',
+    '/vendor/addon-fit.js': '@xterm/addon-fit',
+  }[path];
+  if (vendor) {
+    try { return send(res, 200, await readFile(require.resolve(vendor)), TYPES[extname(path)]); }
+    catch { return send(res, 503, 'Terminal assets missing. Run npm install.'); }
+  }
   const rel = urlPath === '/' ? 'index.html' : path.replace(/^\/+/, '');
   const target = resolve(join(WEB, normalize(rel)));
   if (!target.startsWith(WEB + sep) && target !== WEB) return send(res, 403, 'forbidden');
@@ -227,6 +240,61 @@ async function gmailRoute(req, res, url, dir, json) {
   }
 }
 
+// These routes are reached only after owner authentication. PTY creation is a request:
+// the shell cannot start until the separate approval endpoint is called.
+async function infrastructureRoute(req, res, url, config, json) {
+  try {
+    const parts = url.pathname.split('/').filter(Boolean);
+    const body = async () => {
+      try {
+        const value = JSON.parse(await readBody(req, 96 * 1024));
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('object required');
+        return value;
+      }
+      catch { throw Object.assign(new Error('invalid JSON'), { code: 400 }); }
+    };
+    if (parts[1] === 'hosts') {
+      if (parts.length > 4) return json(404, { error: 'not found' });
+      const [, , id, action] = parts;
+      if (!id && req.method === 'GET') return json(200, { hosts: hosts.listHosts(config) });
+      if (!id && req.method === 'POST') return json(201, { host: hosts.saveHost(config, await body()) });
+      if (id && !action && req.method === 'PATCH') return json(200, { host: hosts.saveHost(config, await body(), id) });
+      if (id && !action && req.method === 'DELETE') {
+        if (pty.listTerminals(config).some((t) => t.hostId === id && ['pending', 'starting', 'running', 'stopping'].includes(t.state))) return json(409, { error: 'Close this host’s terminal sessions first.' });
+        hosts.deleteHost(config, id);
+        return json(200, { ok: true });
+      }
+      if (id && action === 'stats' && req.method === 'GET') return json(200, { stats: await hosts.hostStats(config, id) });
+    } else {
+      if (parts.length > 5) return json(404, { error: 'not found' });
+      const [, , , id, action] = parts;
+      if (!id && req.method === 'GET') return json(200, { terminals: pty.listTerminals(config) });
+      if (!id && req.method === 'POST') return json(201, { terminal: pty.requestTerminal(config, await body()) });
+      if (id && !action && req.method === 'GET') return json(200, { terminal: pty.getTerminal(config, id) });
+      if (id && !action && req.method === 'DELETE') return json(200, { terminal: pty.stopTerminal(config, id) });
+      if (id && action === 'approve' && req.method === 'POST') return json(200, { terminal: await pty.approveTerminal(config, id, await body()) });
+      if (id && action === 'input' && req.method === 'POST') { pty.inputTerminal(config, id, await body()); return json(200, { ok: true }); }
+      if (id && action === 'resize' && req.method === 'POST') { pty.resizeTerminal(config, id, await body()); return json(200, { ok: true }); }
+      if (id && action === 'events' && req.method === 'GET') {
+        pty.getTerminal(config, id);
+        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' });
+        const off = pty.subscribeTerminal(config, id, (event) => {
+          if (res.writableLength > 2 * 1024 * 1024) return res.destroy();
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        });
+        const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
+        req.on('close', () => { off(); clearInterval(ping); });
+        return;
+      }
+    }
+    return json(404, { error: 'not found' });
+  } catch (e) {
+    const status = Number.isInteger(e.code) && e.code >= 400 && e.code <= 599 ? e.code : 500;
+    if (res.headersSent) return res.destroy();
+    return json(status, { error: status === 500 ? 'Infrastructure operation failed.' : e.message });
+  }
+}
+
 // Owner routes (terminal, agents, sessions): 403 until a token exists, 401 on a wrong one.
 async function terminalRoute(req, res, url, config) {
   const dir = config.dir ?? defaultDir();
@@ -247,6 +315,9 @@ async function terminalRoute(req, res, url, config) {
   const auth = authorize(req, dir);
   if (auth === 'disabled') return send(res, 403, JSON.stringify({ error: 'terminal disabled', hint: 'spectrahub token' }), 'application/json; charset=utf-8');
   if (auth !== 'ok') return send(res, 401, JSON.stringify({ error: 'unauthorized' }), 'application/json; charset=utf-8');
+  if (/^\/api\/hosts(?:\/|$)/.test(url.pathname) || /^\/api\/terminal\/sessions(?:\/|$)/.test(url.pathname)) {
+    return infrastructureRoute(req, res, url, { ...config, dir }, json);
+  }
   if (url.pathname === '/api/agents' && req.method === 'GET') {
     return json(200, { agents: await scan({ fresh: url.searchParams.has('fresh') }) });
   }
@@ -474,7 +545,7 @@ async function handle(req, res, config) {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
   }
-  if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|github(\/|$)|gmail(\/|$)|fs\/(dirs|list|read|raw)$|agents\/\w+\/(files?|history)$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
+  if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|hosts(\/|$)|connections(\/|$)|github(\/|$)|gmail(\/|$)|fs\/(dirs|list|read|raw)$|agents\/\w+\/(files?|history)$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
   return serveStatic(res, url.pathname);
 }
@@ -482,6 +553,8 @@ async function handle(req, res, config) {
 export function start(config) {
   const { host, port } = config.server;
   const server = createServer(config);
+  server.on('close', () => pty.closeTerminals(config));
+  recoverRuns(config);
   scan().catch(() => {});  // warm the agent scan so the first "start sesja" does not wait
   return new Promise((ok, fail) => {
     server.once('error', fail);

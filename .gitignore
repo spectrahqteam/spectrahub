@@ -8,6 +8,11 @@ node_modules/
 *.log
 .DS_Store
 dist/
+*.tgz
+__pycache__/
+.spectrahub/
+playwright-report/
+test-results/
 
 # The team's own material stays on the server, in this folder, and is never published:
 # working notes, briefs, design references with real server data, demos.

@@ -6,9 +6,12 @@ import { homedir, userInfo } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { VERSION, defaultDir, paths, readConfig, writeConfig, newConfig } from '../src/config.js';
 import { start } from '../src/server.js';
 import { createPairing, ensureToken, loginLink, tokenPath } from '../src/terminal.js';
+import { closeTerminals } from '../src/pty.js';
+import { unitQuote } from '../src/systemd.js';
 
 const PKG_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const args = process.argv.slice(2);
@@ -47,10 +50,12 @@ function unitText({ dir, config, system }) {
     '',
     '[Service]',
     'Type=simple',
-    `Environment=SPECTRAHUB_HOME=${dir}`,
-    `ExecStart=${process.execPath} ${bin} serve`,
+    `Environment=${unitQuote(`SPECTRAHUB_HOME=${dir}`)}`,
+    `ExecStart=${unitQuote(process.execPath, { exec: true })} ${unitQuote(bin, { exec: true })} serve`,
     'Restart=always',
     'RestartSec=3',
+    'KillMode=process', // detached conversation workers survive an HTTP service restart
+    'TimeoutStopSec=10',
   ];
   if (system) {
     lines.push('User=' + (process.env.SUDO_USER || userInfo().username));
@@ -154,7 +159,11 @@ Usage: spectrahub <command> [options]
     import('../src/agents.js').then((m) => m.models({ wait: true })).catch(() => {});  // warm the model list (some CLIs are slow)
     const addr = `http://${config.server.host}:${config.server.port}`;
     console.log(`spectrahub ${VERSION} listening on ${addr}`);
-    const stop = () => server.close(() => process.exit(0));
+    const stop = () => {
+      closeTerminals(config);
+      server.close(() => process.exit(0));
+      server.closeAllConnections();
+    };
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
   },
@@ -181,6 +190,13 @@ Usage: spectrahub <command> [options]
     const rows = [];
     const ok = (label, value, good) => rows.push([good ? 'ok  ' : 'FAIL', label, String(value)]);
     ok('node version', process.version, Number(process.versions.node.split('.')[0]) >= 20);
+    const python = spawnSync('python3', ['-c', 'import pty,termios; print("available")'], { encoding: 'utf8' });
+    ok('PTY Python 3', python.status === 0 ? 'available' : 'install python3', python.status === 0);
+    const ssh = spawnSync('ssh', ['-V'], { encoding: 'utf8' });
+    ok('SSH client', ssh.status === 0 ? 'available' : 'install openssh-client', ssh.status === 0);
+    let terminalAssets = false;
+    try { const require = createRequire(import.meta.url); terminalAssets = Boolean(require.resolve('@xterm/xterm') && require.resolve('@xterm/addon-fit')); } catch { /* doctor reports missing dependencies */ }
+    ok('terminal assets', 'xterm.js', terminalAssets);
     ok('install dir', dir, existsSync(dir));
     ok('config file', paths(dir).config, existsSync(paths(dir).config));
     ok('web shell', join(PKG_ROOT, 'web', 'index.html'), existsSync(join(PKG_ROOT, 'web', 'index.html')));

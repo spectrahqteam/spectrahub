@@ -2,11 +2,12 @@
 // session; before its turn it gets what the others said since it last spoke, so they work together.
 // Runs live on the server, not in the browser tab: closing the phone does not stop an agent.
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync, renameSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync, renameSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, normalize } from 'node:path';
 import { homedir } from 'node:os';
-import { claudeHas, codexLimits, PERMS, scan, turn, newRef } from './agents.js';
+import { claudeHas, codexLimits, PERMS, scan, newRef } from './agents.js';
 import { launchAuth, limitHit, LIMIT_TEXT } from './connections.js';
+import { prepareRun, launchRun, attachRun, readRun } from './run-journal.js';
 
 const CONTEXT_CHARS = 8000;
 const sessions = new Map();     // id -> session (loaded lazily)
@@ -15,13 +16,14 @@ const running = new Map();      // `${id}:${agent}` -> stop()
 
 function dirOf(config) {
   const d = join(config.dir, 'data', 'sessions');
-  mkdirSync(d, { recursive: true });
+  mkdirSync(d, { recursive: true, mode: 0o700 });
   return d;
 }
 
 function save(config, s) {
   const file = join(dirOf(config), `${s.id}.json`);
-  writeFileSync(file + '.tmp', JSON.stringify(s));
+  writeFileSync(file + '.tmp', JSON.stringify(s), { mode: 0o600 });
+  chmodSync(file + '.tmp', 0o600);
   renameSync(file + '.tmp', file);
 }
 
@@ -31,8 +33,20 @@ function load(config, id) {
   const file = join(dirOf(config), `${id}.json`);
   if (!existsSync(file)) return null;
   const s = JSON.parse(readFileSync(file, 'utf8'));
-  for (const a of Object.values(s.agents)) a.state = 'idle';  // a restart ends any run in flight
-  for (const e of s.log) if (e.status === 'running') { e.status = 'error'; e.error = 'przerwane: serwer SpectraHub został uruchomiony ponownie'; }
+  sessions.set(id, s);  // callbacks may ask for the same session while replaying
+  for (const a of Object.values(s.agents)) a.state = 'idle';
+  for (const reply of s.log) if (reply.status === 'running') {
+    const spec = reply.run?.id ? readRun(config, reply.run.id) : null;
+    const mine = spec && s.log.find((e) => e.n === spec.context.mine);
+    if (spec && mine && s.agents[reply.who]) {
+      s.agents[reply.who].state = 'busy';
+      manageReply(config, s, reply.who, mine, reply, spec.runtime, spec.context, reply.run);
+    } else {
+      reply.status = 'error';
+      reply.error = 'Przerwana starsza sesja bez workera. Nie powtórzono poleceń; wyślij dalszą wiadomość, aby kontynuować.';
+      for (const item of reply.items ?? []) if (item.k === 'ask' && item.status === 'waiting') item.status = 'expired';
+    }
+  }
   // Sessions from before automatic names carry a date; name them after their first line instead.
   const first = s.log.find((e) => e.who === 'you' && e.s);
   if (first && /^sesja \d{4}-\d\d-\d\d \d\d:\d\d$/.test(s.title)) { s.title = titleFrom(first.s); s.autoTitle = false; save(config, s); }
@@ -149,6 +163,7 @@ export function deleteSession(config, id) {
   const s = load(config, id);
   if (!s) return { error: 'no such session', code: 404 };
   stop(config, id);
+  for (const [key, control] of running) if (key.startsWith(`${id}:`)) { control.detach?.(); running.delete(key); }
   const trash = join(dirOf(config), 'trash');
   mkdirSync(trash, { recursive: true });
   renameSync(join(dirOf(config), `${id}.json`), join(trash, `${id}.json`));
@@ -254,7 +269,9 @@ export function sessionFile(config, id, fileId) {
   if (!s) return { error: 'no such session', code: 404 };
   const f = s.files?.find((x) => x.id === fileId);
   if (!f) return { error: 'no such file', code: 404 };
-  if (SECRET.test(f.path)) return { error: 'refused: looks like a secret', code: 403 };
+  let real;
+  try { real = realpathSync(f.path); } catch { return { error: 'file is gone', code: 410 }; }
+  if (SECRET.test(f.path) || SECRET.test(real)) return { error: 'refused: looks like a secret', code: 403 };
   let st;
   try { st = statSync(f.path); } catch { return { error: 'file is gone', code: 410 }; }
   if (!st.isFile()) return { error: 'not a file', code: 400 };
@@ -273,11 +290,17 @@ export function recentFiles(config, limit = 12) {
 
 // Every running turn on this server, for the "background tasks" view.
 export function runs(config) {
+  listSessions(config);  // discover workers that were already running before this server started
   return [...running.keys()].map((key) => {
     const [id, agent] = key.split(':');
     const s = sessions.get(id);
     return s && { session: id, title: s.title, agent };
   }).filter(Boolean);
+}
+
+export function recoverRuns(config) {
+  listSessions(config);
+  return running.size;
 }
 
 export function getSession(config, id) {
@@ -359,14 +382,160 @@ function readVote(text, options, whole = '') {
   return { option: option >= 0 ? option : null, reason: t.replace(/\s+/g, ' ').slice(0, 400) };
 }
 
+// A durable worker emits the same events on a new connection or after a server restart.
+// Its journal cursor and the updated conversation are committed in the same snapshot.
+function manageReply(config, s, agent, mine, reply, rt, { began, prompt, hint, images }, recovered = null) {
+  const st = s.agents[agent];
+  const env = { SPECTRAHUB_SESSION: s.id, SPECTRAHUB_AGENT: agent, SPECTRAHUB_HOME: config.dir };
+  // Subscription or API key, as set in Settings → Agents; `auto` moves to the key when the plan runs out.
+  const start = (force, text, recovered = null) => {
+    const auth = recovered ? { canFallBack: recovered.canFallBack, via: reply.via } : launchAuth(config, agent, { limits: st.limits, force });
+    if (auth.error) {
+      reply.status = 'error';
+      reply.error = auth.error;
+      publish(s.id, { type: 'end', n: reply.n, status: 'error', error: reply.error });
+      setState(s, agent, 'idle');
+      save(config, s);
+      return;
+    }
+    if (auth.via) { reply.via = auth.via; st.via = auth.via; publish(s.id, { type: 'via', n: reply.n, agent, via: auth.via }); }
+    const options = { ref: st.ref, started: st.started, prompt: text, cwd: s.cwd, ownCwd: Boolean(s.cwdChosen),
+      model: st.model || null, effort: st.effort || null, perm: st.perm ?? 'full', images, env: { ...env, ...auth.env }, drop: auth.drop };
+    const runId = recovered?.id ?? prepareRun(config, rt, options, { began, prompt, hint, images, mine: mine.n });
+    reply.run = { id: runId, cursor: recovered?.cursor ?? 0, canFallBack: Boolean(auth.canFallBack) };
+    save(config, s);
+    if (!recovered) launchRun(config, runId, rt, options);
+    const apply = (e) => {
+      if (e.type === 'text') {
+        const last = reply.items.at(-1);
+        const s1 = last?.k === 'text' && e.block && last.s && !last.s.endsWith('\n') ? '\n' + e.s : e.s;
+        if (!s1) return;
+        if (last?.k === 'text') last.s += s1;
+        else reply.items.push({ k: 'text', s: s1 });
+        reply.s += (reply.s && !reply.s.endsWith('\n') && last?.k !== 'text' ? '\n' : '') + s1;
+        publish(s.id, { type: 'delta', n: reply.n, s: s1 });
+      } else if (e.type === 'step' || e.type === 'step-end') {
+        let step = reply.items.find((i) => i.k === 'step' && i.id === e.id);
+        if (!step) {
+          step = { k: 'step', id: e.id, kind: e.kind ?? 'tool', name: e.name ?? '', title: '', status: 'running', t0: Date.now() };
+          reply.items.push(step);
+        }
+        if (e.type === 'step') {
+          for (const key of ['kind', 'name', 'title', 'text', 'diff', 'todos']) if (e[key] != null && e[key] !== '') step[key] = e[key];
+          if (e.done) step.status = 'ok';
+          if (step.kind === 'edit') {  // files the agent writes can be opened from the chat
+            const paths = step.diff?.path ? [step.diff.path] : String(step.title ?? '').split(/[\s,]+/).filter((x) => x.startsWith('/'));
+            const tracked = paths.map((p) => track(s, p, agent)).filter(Boolean);
+            if (tracked.length) { step.files = tracked.map((f) => f.id); publish(s.id, { type: 'files', files: s.files }); }
+          }
+        } else {
+          for (const fid of step.files ?? []) track(s, s.files.find((f) => f.id === fid)?.path, agent);  // size after writing
+          if (step.kind === 'tool') {  // shell writes (cat > f, tee, cp, -o) count as files too
+            const made = writtenBy(step.title).filter((p) => freshFile(p, began)).map((p) => track(s, p, agent)).filter(Boolean);
+            if (made.length) { step.files = made.map((f) => f.id); made.forEach((f) => addReplyFile(s, reply, f)); publish(s.id, { type: 'files', files: s.files }); }
+          }
+          step.status = e.ok === false ? 'error' : 'ok';
+          if (e.output != null) step.output = e.output;
+          if (e.exit != null) step.exit = e.exit;
+          step.ms = Date.now() - step.t0;
+        }
+        publish(s.id, { type: 'step', n: reply.n, step });
+      } else if (e.type === 'usage') {
+        const { type: _t, ...u } = e;
+        reply.usage = { ...reply.usage, ...Object.fromEntries(Object.entries(u).filter(([, v]) => v != null)) };
+        publish(s.id, { type: 'usage', n: reply.n, usage: reply.usage });
+      } else if (e.type === 'limits') {
+        st.limits = { windows: e.windows, status: e.status, at: new Date().toISOString() };
+        publish(s.id, { type: 'limits', agent, limits: st.limits });
+      } else if (e.type === 'file') {
+        const f = track(s, e.path, agent);
+        if (f) { addReplyFile(s, reply, f); publish(s.id, { type: 'files', files: s.files }); }
+      } else if (e.type === 'limits-codex') {
+        const l = codexLimits(st.ref);
+        if (l) { st.limits = { ...l, at: new Date().toISOString() }; publish(s.id, { type: 'limits', agent, limits: st.limits }); }
+      } else if (e.type === 'ask') {
+        // the agent waits: a permission to grant or a question to answer, in the chat
+        const item = { k: 'ask', id: e.id, kind: e.kind, tool: e.tool, title: e.title, description: e.description, path: e.path,
+          questions: e.questions, always: e.always, scope: e.scope, status: 'waiting', at: new Date().toISOString() };
+        reply.items.push(item);
+        publish(s.id, { type: 'ask', n: reply.n, agent, item });
+        save(config, s);
+      } else if (e.type === 'answer' || e.type === 'answer-rejected') {
+        const item = reply.items.find((i) => i.k === 'ask' && i.id === e.id);
+        if (item) {
+          item.status = e.type === 'answer-rejected' ? 'expired' : e.decision === 'deny' ? 'denied' : item.kind === 'question' ? 'answered' : e.decision === 'always' ? 'always' : 'allowed';
+          if (item.kind === 'question' && e.answers) item.answers = e.answers;
+          publish(s.id, { type: 'ask', n: reply.n, agent, item });
+        }
+      } else if (e.type === 'ref') {
+        st.ref = e.ref;
+        if (e.ref) st.started = true;
+      } else if (e.type === 'error') {
+        reply.error = e.s;
+        if (e.interrupted) reply.interrupted = true;
+      } else if (e.type === 'done') {
+        running.delete(`${s.id}:${agent}`);
+        if (auth.canFallBack && !reply.interrupted && reply.error && (LIMIT_TEXT.test(reply.error) || limitHit(st.limits))) {
+          const step = { k: 'step', id: `auth-${Date.now()}`, kind: 'tool', name: 'SpectraHub', title: 'limit subskrypcji wyczerpany — dalej na kluczu API', status: 'ok' };
+          reply.items.push(step);
+          publish(s.id, { type: 'step', n: reply.n, step });
+          delete reply.error;
+          st.started = agent === 'claude' ? claudeHas(st.ref) : Boolean(st.ref);
+          return start('api', reply.s.trim() && st.started ? '(SpectraHub: poprzednia odpowiedź urwała się na limicie subskrypcji — dokończ ją.)' : prompt + hint);
+        }
+        if (st.ref) st.started = true;
+        for (const i of reply.items) if (i.k === 'ask' && i.status === 'waiting') i.status = 'expired';
+        reply.s = reply.s.trimEnd();
+        if (mine.poll) {
+          const final = [...reply.items].reverse().find((i) => i.k === 'text')?.s ?? reply.s;  // the last thing it said
+          mine.poll.votes[agent] = readVote(final, mine.poll.options, reply.s);
+          publish(s.id, { type: 'poll', n: mine.n, poll: mine.poll });
+        }
+        reply.status = reply.error ? 'error' : 'done';
+        for (const p of namedIn(reply.s)) if (freshFile(p, began) && !SECRET.test(p)) addReplyFile(s, reply, track(s, p, agent));
+        if (reply.files?.length) publish(s.id, { type: 'files', files: s.files });
+        const u = reply.usage ?? {};
+        const tot = (st.usage ??= { input: 0, output: 0, cost: 0, turns: 0 });  // running totals for the usage view
+        tot.input += u.input ?? 0;
+        tot.output += u.output ?? 0;
+        tot.cost += u.cost ?? 0;
+        tot.turns += 1;
+        for (const k of ['model', 'context', 'contextWindow']) if (u[k] != null) tot[k] = u[k];
+        reply.ms = Date.now() - began;
+        for (const i of reply.items) if (i.k === 'step' && i.status === 'running') i.status = reply.error ? 'error' : 'ok';
+        publish(s.id, { type: 'usage', n: reply.n, usage: reply.usage ?? {}, ms: reply.ms });
+        reply.done = new Date().toISOString();
+        s.updatedAt = reply.done;
+        publish(s.id, { type: 'end', n: reply.n, status: reply.status, error: reply.error ?? null });
+        setState(s, agent, 'idle');
+        save(config, s);
+      }
+    };
+    const stop = attachRun(config, runId, reply.run.cursor, (event, cursor) => {
+      if (reply.run?.id !== runId) return;
+      reply.run.cursor = cursor;
+      apply(event);
+      save(config, s);
+    });
+    running.set(`${s.id}:${agent}`, stop);
+  };
+  start(null, prompt + hint, recovered);
+}
+
 export async function send(config, id, { to, text, attachments = [], poll = null }) {
   const s = load(config, id);
   if (!s) return { error: 'no such session', code: 404 };
-  const targets = (to.includes('all') ? Object.keys(s.agents) : to).filter((a) => s.agents[a]);
+  const targets = [...new Set(to.includes('all') ? Object.keys(s.agents) : to)].filter((a) => s.agents[a]);
   if (!targets.length) return { error: 'no such agent in this session', code: 400 };
   const busy = targets.filter((a) => s.agents[a].state === 'busy');
   if (busy.length) return { error: `busy: ${busy.join(', ')}`, code: 409 };
-  const runtimes = await scan();
+  // Reserve targets before the first await: concurrent POSTs must not launch a duplicate turn.
+  for (const agent of targets) s.agents[agent].state = 'busy';
+  let runtimes;
+  try { runtimes = await scan(); } catch (error) {
+    for (const agent of targets) s.agents[agent].state = 'idle';
+    return { error: error.message, code: 503 };
+  }
   const files = attachments.map((fid) => s.files?.find((f) => f.id === fid)).filter(Boolean);
   const mine = add(config, s, { who: 'you', to: targets, s: text, ...(files.length ? { files: files.map((f) => f.id) } : {}),
     ...(poll ? { poll: { question: text, options: poll.options, votes: {} } } : {}) });
@@ -395,126 +564,14 @@ export async function send(config, id, { to, text, attachments = [], poll = null
     if (!rt) {
       reply.status = 'error';
       reply.error = 'agent niedostępny na tym serwerze';
+      setState(s, agent, 'idle');
       publish(s.id, { type: 'end', n: reply.n, status: 'error', error: reply.error });
       continue;
     }
     setState(s, agent, 'busy');
     const images = files.filter((f) => f.type.startsWith('image/')).map((f) => f.path);
     const hint = st.started ? '' : '\n\n(SpectraHub: jeśli przygotujesz plik dla użytkownika, podaj w odpowiedzi jego pełną ścieżkę — pojawi się w czacie jako plik do otwarcia.)';
-    const env = { SPECTRAHUB_SESSION: s.id, SPECTRAHUB_AGENT: agent, SPECTRAHUB_HOME: config.dir };
-    // Subscription or API key, as set in Settings → Agents; `auto` moves to the key when the plan runs out.
-    const start = (force, text) => {
-      const auth = launchAuth(config, agent, { limits: st.limits, force });
-      if (auth.error) {
-        reply.status = 'error';
-        reply.error = auth.error;
-        publish(s.id, { type: 'end', n: reply.n, status: 'error', error: reply.error });
-        setState(s, agent, 'idle');
-        save(config, s);
-        return;
-      }
-      if (auth.via) { reply.via = auth.via; st.via = auth.via; publish(s.id, { type: 'via', n: reply.n, agent, via: auth.via }); }
-      const stop = turn(rt, { ref: st.ref, started: st.started, prompt: text, cwd: s.cwd, ownCwd: Boolean(s.cwdChosen),
-        model: st.model || null, effort: st.effort || null, perm: st.perm ?? 'full', images, env: { ...env, ...auth.env }, drop: auth.drop }, (e) => {
-        if (e.type === 'text') {
-          const last = reply.items.at(-1);
-          const s1 = last?.k === 'text' && e.block && last.s && !last.s.endsWith('\n') ? '\n' + e.s : e.s;
-          if (!s1) return;
-          if (last?.k === 'text') last.s += s1;
-          else reply.items.push({ k: 'text', s: s1 });
-          reply.s += (reply.s && !reply.s.endsWith('\n') && last?.k !== 'text' ? '\n' : '') + s1;
-          publish(s.id, { type: 'delta', n: reply.n, s: s1 });
-        } else if (e.type === 'step' || e.type === 'step-end') {
-          let step = reply.items.find((i) => i.k === 'step' && i.id === e.id);
-          if (!step) {
-            step = { k: 'step', id: e.id, kind: e.kind ?? 'tool', name: e.name ?? '', title: '', status: 'running', t0: Date.now() };
-            reply.items.push(step);
-          }
-          if (e.type === 'step') {
-            for (const key of ['kind', 'name', 'title', 'text', 'diff', 'todos']) if (e[key] != null && e[key] !== '') step[key] = e[key];
-            if (e.done) step.status = 'ok';
-            if (step.kind === 'edit') {  // files the agent writes can be opened from the chat
-              const paths = step.diff?.path ? [step.diff.path] : String(step.title ?? '').split(/[\s,]+/).filter((x) => x.startsWith('/'));
-              const tracked = paths.map((p) => track(s, p, agent)).filter(Boolean);
-              if (tracked.length) { step.files = tracked.map((f) => f.id); publish(s.id, { type: 'files', files: s.files }); }
-            }
-          } else {
-            for (const fid of step.files ?? []) track(s, s.files.find((f) => f.id === fid)?.path, agent);  // size after writing
-            if (step.kind === 'tool') {  // shell writes (cat > f, tee, cp, -o) count as files too
-              const made = writtenBy(step.title).filter((p) => freshFile(p, began)).map((p) => track(s, p, agent)).filter(Boolean);
-              if (made.length) { step.files = made.map((f) => f.id); made.forEach((f) => addReplyFile(s, reply, f)); publish(s.id, { type: 'files', files: s.files }); }
-            }
-            step.status = e.ok === false ? 'error' : 'ok';
-            if (e.output != null) step.output = e.output;
-            if (e.exit != null) step.exit = e.exit;
-            step.ms = Date.now() - step.t0;
-          }
-          publish(s.id, { type: 'step', n: reply.n, step });
-        } else if (e.type === 'usage') {
-          const { type: _t, ...u } = e;
-          reply.usage = { ...reply.usage, ...Object.fromEntries(Object.entries(u).filter(([, v]) => v != null)) };
-          publish(s.id, { type: 'usage', n: reply.n, usage: reply.usage });
-        } else if (e.type === 'limits') {
-          st.limits = { windows: e.windows, status: e.status, at: new Date().toISOString() };
-          publish(s.id, { type: 'limits', agent, limits: st.limits });
-        } else if (e.type === 'file') {
-          const f = track(s, e.path, agent);
-          if (f) { addReplyFile(s, reply, f); publish(s.id, { type: 'files', files: s.files }); }
-        } else if (e.type === 'limits-codex') {
-          const l = codexLimits(st.ref);
-          if (l) { st.limits = { ...l, at: new Date().toISOString() }; publish(s.id, { type: 'limits', agent, limits: st.limits }); }
-        } else if (e.type === 'ask') {
-          // the agent waits: a permission to grant or a question to answer, in the chat
-          const item = { k: 'ask', id: e.id, kind: e.kind, tool: e.tool, title: e.title, description: e.description, path: e.path,
-            questions: e.questions, always: e.always, status: 'waiting', at: new Date().toISOString() };
-          reply.items.push(item);
-          publish(s.id, { type: 'ask', n: reply.n, agent, item });
-          save(config, s);
-        } else if (e.type === 'ref') {
-          st.ref = e.ref;
-        } else if (e.type === 'error') {
-          reply.error = e.s;
-        } else if (e.type === 'done') {
-          running.delete(`${s.id}:${agent}`);
-          if (auth.canFallBack && reply.error && (LIMIT_TEXT.test(reply.error) || limitHit(st.limits))) {
-            const step = { k: 'step', id: `auth-${Date.now()}`, kind: 'tool', name: 'SpectraHub', title: 'limit subskrypcji wyczerpany — dalej na kluczu API', status: 'ok' };
-            reply.items.push(step);
-            publish(s.id, { type: 'step', n: reply.n, step });
-            delete reply.error;
-            st.started = agent === 'claude' ? claudeHas(st.ref) : Boolean(st.ref);
-            return start('api', reply.s.trim() && st.started ? '(SpectraHub: poprzednia odpowiedź urwała się na limicie subskrypcji — dokończ ją.)' : prompt + hint);
-          }
-          if (st.ref) st.started = true;
-          for (const i of reply.items) if (i.k === 'ask' && i.status === 'waiting') i.status = 'expired';
-          reply.s = reply.s.trimEnd();
-          if (mine.poll) {
-            const final = [...reply.items].reverse().find((i) => i.k === 'text')?.s ?? reply.s;  // the last thing it said
-            mine.poll.votes[agent] = readVote(final, mine.poll.options, reply.s);
-            publish(s.id, { type: 'poll', n: mine.n, poll: mine.poll });
-          }
-          reply.status = reply.error ? 'error' : 'done';
-          for (const p of namedIn(reply.s)) if (freshFile(p, began) && !SECRET.test(p)) addReplyFile(s, reply, track(s, p, agent));
-          if (reply.files?.length) publish(s.id, { type: 'files', files: s.files });
-          const u = reply.usage ?? {};
-          const tot = (st.usage ??= { input: 0, output: 0, cost: 0, turns: 0 });  // running totals for the usage view
-          tot.input += u.input ?? 0;
-          tot.output += u.output ?? 0;
-          tot.cost += u.cost ?? 0;
-          tot.turns += 1;
-          for (const k of ['model', 'context', 'contextWindow']) if (u[k] != null) tot[k] = u[k];
-          reply.ms = Date.now() - began;
-          for (const i of reply.items) if (i.k === 'step' && i.status === 'running') i.status = reply.error ? 'error' : 'ok';
-          publish(s.id, { type: 'usage', n: reply.n, usage: reply.usage ?? {}, ms: reply.ms });
-          reply.done = new Date().toISOString();
-          s.updatedAt = reply.done;
-          publish(s.id, { type: 'end', n: reply.n, status: reply.status, error: reply.error ?? null });
-          setState(s, agent, 'idle');
-          save(config, s);
-        }
-      });
-      running.set(`${s.id}:${agent}`, stop);
-    };
-    start(null, prompt + hint);
+    manageReply(config, s, agent, mine, reply, rt, { began, prompt, hint, images });
   }
   save(config, s);
   return { ok: true, targets };

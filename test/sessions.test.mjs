@@ -1,7 +1,7 @@
 // Sessions with agents, against fake runtimes on PATH: no network, no cost.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -303,6 +303,14 @@ test('files agents write with shell commands or name in the reply reach the chat
   assert.equal((await (await api(`/api/sessions/${session.id}/files/${file.id}`)).text()), 'gotowy raport');
   assert.equal((await api(`/api/sessions/${session.id}/attach`, { method: 'POST', body: JSON.stringify({ path: join(dir, 'token') }) })).status, 403, 'secrets are refused');
   assert.equal((await api(`/api/sessions/${session.id}/attach`, { method: 'POST', body: JSON.stringify({ path: 'relative.txt' }) })).status, 400);
+  const secret = join(dir, '.env.replacement');
+  writeFileSync(secret, 'FIXTURE_SECRET=synthetic-only');
+  rmSync(out);
+  symlinkSync(secret, out);
+  const replaced = await api(`/api/sessions/${session.id}/files/${file.id}`);
+  assert.equal(replaced.status, 403, 'a known attachment is checked again after becoming a symlink to a secret');
+  assert.ok(!(await replaced.text()).includes('synthetic-only'), 'secret bytes are never returned');
+
 });
 
 test('the owner can set the name the app greets', async () => {
