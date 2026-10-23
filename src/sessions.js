@@ -335,7 +335,18 @@ function setState(s, agent, state) {
 }
 
 // Sends the user's line to the chosen agents; each answers in its own entry, streamed as it comes.
-export async function send(config, id, { to, text, attachments = [] }) {
+// A poll: the question goes to the chosen agents, each answers with an option and why.
+const pollPrompt = (q, options) => `Ankieta od użytkownika: ${q}\nOpcje:\n${options.map((o, i) => `${i + 1}) ${o}`).join('\n')}\n\n`
+  + 'Odpowiedz tak: w pierwszej linii sam numer wybranej opcji, w następnych 1–3 zdania, dlaczego.';
+function readVote(text, options) {
+  const t = String(text ?? '').trim();
+  const m = /^\D{0,12}?(\d{1,2})\b/.exec(t.split('\n')[0] ?? '');
+  let option = m ? Number(m[1]) - 1 : options.findIndex((o) => t.toLowerCase().startsWith(o.toLowerCase()));
+  if (!(option >= 0 && option < options.length)) option = null;
+  return { option, reason: t.split('\n').slice(1).join(' ').replace(/\s+/g, ' ').trim().slice(0, 400) || (option == null ? t.slice(0, 400) : '') };
+}
+
+export async function send(config, id, { to, text, attachments = [], poll = null }) {
   const s = load(config, id);
   if (!s) return { error: 'no such session', code: 404 };
   const targets = (to.includes('all') ? Object.keys(s.agents) : to).filter((a) => s.agents[a]);
@@ -344,7 +355,8 @@ export async function send(config, id, { to, text, attachments = [] }) {
   if (busy.length) return { error: `busy: ${busy.join(', ')}`, code: 409 };
   const runtimes = await scan();
   const files = attachments.map((fid) => s.files?.find((f) => f.id === fid)).filter(Boolean);
-  const mine = add(config, s, { who: 'you', to: targets, s: text, ...(files.length ? { files: files.map((f) => f.id) } : {}) });
+  const mine = add(config, s, { who: 'you', to: targets, s: text, ...(files.length ? { files: files.map((f) => f.id) } : {}),
+    ...(poll ? { poll: { question: text, options: poll.options, votes: {} } } : {}) });
   if (s.autoTitle) {  // an unnamed session takes its name from the first line
     s.title = titleFrom(text);
     s.autoTitle = false;
@@ -360,11 +372,12 @@ export async function send(config, id, { to, text, attachments = [] }) {
     const attached = files.length
       ? `\n\nZałączniki od użytkownika (pliki na tym serwerze):\n${files.map((f) => `- ${f.path} (${f.type}${f.size != null ? `, ${f.size} B` : ''})`).join('\n')}`
       : '';
+    const ask = poll ? pollPrompt(text, poll.options) : text;
     const prompt = (others
-      ? `Rozmowa zespołowa w SpectraHub. Od Twojej ostatniej odpowiedzi:\n${others}\n\n---\nWiadomość do Ciebie:\n${text}`
-      : text) + attached;
+      ? `Rozmowa zespołowa w SpectraHub. Od Twojej ostatniej odpowiedzi:\n${others}\n\n---\nWiadomość do Ciebie:\n${ask}`
+      : ask) + attached;
     // The reply is a timeline: text and steps (tools, edits, thinking, plan) in the order they happened.
-    const reply = add(config, s, { who: agent, s: '', items: [], status: 'running' });
+    const reply = add(config, s, { who: agent, s: '', items: [], status: 'running', ...(poll ? { vote: mine.n } : {}) });
     const began = Date.now();
     if (!rt) {
       reply.status = 'error';
@@ -437,6 +450,13 @@ export async function send(config, id, { to, text, attachments = [] }) {
         } else if (e.type === 'limits-codex') {
           const l = codexLimits(st.ref);
           if (l) { st.limits = { ...l, at: new Date().toISOString() }; publish(s.id, { type: 'limits', agent, limits: st.limits }); }
+        } else if (e.type === 'ask') {
+          // the agent waits: a permission to grant or a question to answer, in the chat
+          const item = { k: 'ask', id: e.id, kind: e.kind, tool: e.tool, title: e.title, description: e.description, path: e.path,
+            questions: e.questions, always: e.always, status: 'waiting', at: new Date().toISOString() };
+          reply.items.push(item);
+          publish(s.id, { type: 'ask', n: reply.n, agent, item });
+          save(config, s);
         } else if (e.type === 'ref') {
           st.ref = e.ref;
         } else if (e.type === 'error') {
@@ -452,7 +472,12 @@ export async function send(config, id, { to, text, attachments = [] }) {
             return start('api', reply.s.trim() && st.started ? '(SpectraHub: poprzednia odpowiedź urwała się na limicie subskrypcji — dokończ ją.)' : prompt + hint);
           }
           if (st.ref) st.started = true;
+          for (const i of reply.items) if (i.k === 'ask' && i.status === 'waiting') i.status = 'expired';
           reply.s = reply.s.trimEnd();
+          if (mine.poll) {
+            mine.poll.votes[agent] = readVote(reply.s, mine.poll.options);
+            publish(s.id, { type: 'poll', n: mine.n, poll: mine.poll });
+          }
           reply.status = reply.error ? 'error' : 'done';
           for (const p of namedIn(reply.s)) if (freshFile(p, began) && !SECRET.test(p)) addReplyFile(s, reply, track(s, p, agent));
           if (reply.files?.length) publish(s.id, { type: 'files', files: s.files });
@@ -479,6 +504,35 @@ export async function send(config, id, { to, text, attachments = [] }) {
   }
   save(config, s);
   return { ok: true, targets };
+}
+
+// The owner's answer to what an agent asked while it works.
+export function answer(config, id, { agent, ask, decision, answers }) {
+  const s = load(config, id);
+  if (!s?.agents[agent]) return { error: 'no such session or agent', code: 404 };
+  if (!['allow', 'always', 'deny'].includes(decision)) return { error: 'bad decision', code: 400 };
+  const reply = [...s.log].reverse().find((e) => e.who === agent && e.status === 'running');
+  const item = reply?.items?.find((i) => i.k === 'ask' && i.id === ask);
+  if (!item || item.status !== 'waiting') return { error: 'nothing waits for this answer', code: 409 };
+  const ok = running.get(`${id}:${agent}`)?.answer?.(ask, decision, item.kind === 'question' && answers && typeof answers === 'object' ? answers : undefined);
+  if (!ok) return { error: 'the agent no longer waits', code: 409 };
+  item.status = decision === 'deny' ? 'denied' : item.kind === 'question' ? 'answered' : decision === 'always' ? 'always' : 'allowed';
+  if (item.kind === 'question' && answers) item.answers = answers;
+  publish(s.id, { type: 'ask', n: reply.n, agent, item });
+  save(config, s);
+  return { ok: true, item };
+}
+
+// The owner's own vote in a poll.
+export function vote(config, id, n, option) {
+  const s = load(config, id);
+  const e = s?.log.find((x) => x.n === Number(n) && x.poll);
+  if (!e) return { error: 'no such poll', code: 404 };
+  if (!(Number.isInteger(option) && option >= 0 && option < e.poll.options.length)) return { error: 'bad option', code: 400 };
+  e.poll.votes.you = { option, reason: '' };
+  publish(s.id, { type: 'poll', n: e.n, poll: e.poll });
+  save(config, s);
+  return { poll: e.poll };
 }
 
 export function stop(config, id, agent) {

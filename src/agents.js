@@ -189,21 +189,46 @@ function tomlValue(file, key) {
   try { return new RegExp(`^${key}\\s*=\\s*"([^"]*)"`, 'm').exec(readFileSync(file, 'utf8'))?.[1] ?? null; } catch { return null; }
 }
 
+// Claude Code: the newest model of each family it knows, read from the installed program itself
+// (with its long-context variant when it has one), and the effort levels its --help lists.
+const claudeKnown = { key: null, value: null };
+function claudeFamilies(path) {
+  let real = path;
+  try { real = realpathSync(path); } catch { /* keep the path */ }
+  let key = real;
+  try { key = `${real}:${statSync(real).mtimeMs}`; } catch { /* not there */ }
+  if (claudeKnown.key === key) return claudeKnown.value;
+  const best = new Map();  // family -> { major, minor, id, long }
+  try {
+    const text = readFileSync(real).toString('latin1');
+    for (const m of text.matchAll(/claude-(fable|opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(\[1m\])?(?![\d-])/g)) {
+      const [, family, major, minor = '0', long] = m;
+      const id = `claude-${family}-${major}${m[3] ? `-${m[3]}` : ''}`;
+      const cur = best.get(family);
+      const newer = !cur || Number(major) > cur.major || (Number(major) === cur.major && Number(minor) > cur.minor);
+      if (newer) best.set(family, { major: Number(major), minor: Number(minor), id, long: Boolean(long) });
+      else if (cur.id === id && long) cur.long = true;
+    }
+  } catch { /* unreadable: aliases only */ }
+  claudeKnown.key = key;
+  claudeKnown.value = best;
+  return best;
+}
+
 async function claudeModels(rt) {
   const settings = jsonFile(join(homedir(), '.claude', 'settings.json')) ?? {};
-  return {
-    configurable: true,
-    models: [
-      { id: '', label: 'domyślny agenta' },
-      { id: 'fable', label: 'Fable', note: 'najnowszy Fable' },
-      { id: 'opus', label: 'Opus', note: 'najnowszy Opus' },
-      { id: 'sonnet', label: 'Sonnet', note: 'najnowszy Sonnet' },
-      { id: 'haiku', label: 'Haiku', note: 'najnowszy Haiku' },
-    ].map((m) => ({ ...m, efforts: CLAUDE_EFFORTS })),
-    defaultModel: settings.model ?? null,
-    defaultEffort: settings.effortLevel ?? null,
-    effortLabel: 'effort',
-  };
+  const help = await run(rt.path, ['--help'], 15000);
+  const efforts = /--effort <level>[\s\S]{0,200}?\(([a-z, ]+)\)/.exec(help)?.[1]?.split(/,\s*/).filter(Boolean) ?? CLAUDE_EFFORTS;
+  const names = { fable: 'Fable', opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku' };
+  const models = [{ id: '', label: 'domyślny agenta', note: 'Claude Code wybiera według planu i ustawień', efforts }];
+  for (const family of ['fable', 'opus', 'sonnet', 'haiku']) {
+    const b = claudeFamilies(rt.path).get(family);
+    if (!b) { models.push({ id: family, label: names[family], note: 'najnowszy', efforts }); continue; }
+    const label = `${names[family]} ${b.major}${b.minor ? `.${b.minor}` : ''}`;
+    models.push({ id: b.id, label, note: b.id, efforts });
+    if (b.long) models.push({ id: `${b.id}[1m]`, label: `${label} · 1M`, note: 'milion tokenów kontekstu', efforts });
+  }
+  return { configurable: true, models, defaultModel: settings.model ?? null, defaultEffort: settings.effortLevel ?? null, effortLabel: 'effort' };
 }
 
 async function codexModels(rt) {
@@ -270,8 +295,57 @@ async function openclawModels(rt) {
   };
 }
 
-// Runtimes that only take their model from their own configuration say so.
-const MODEL_SOURCES = { claude: claudeModels, codex: codexModels, openclaw: openclawModels };
+// DeepSeek Harness: the models DeepSeek offers to its key, its own reasoning levels, and the model
+// its profile uses. A choice reaches it as a --patch overlay; its own files stay as they are.
+const DSH_EFFORTS = ['off', 'low', 'high', 'max'];
+const DSH_NAMES = { 'deepseek-flash': 'DeepSeek V4.1 Flash', 'deepseek-v4-pro': 'DeepSeek V4 Pro', 'deepseek-chat': 'DeepSeek Chat', 'deepseek-reasoner': 'DeepSeek Reasoner' };
+function dshEnv(rt) { return { ...(rt?.launch?.envFile ? readEnvFile(rt.launch.envFile) : {}), ...(rt?.launch?.env ?? {}) }; }
+// The model and reasoning level DeepSeek Harness really uses: its own composed profile
+// (bundles, the profile's patch, the home patch), as `--dump-config` prints it.
+const dshProf = { key: null, at: 0, value: null };
+export async function dshProfile(rt) {
+  const env = { ...process.env, ...dshEnv(rt) };
+  const key = `${env.DSH_HOME ?? ''}:${rt?.path ?? ''}`;
+  if (dshProf.key === key && Date.now() - dshProf.at < 10 * 60_000) return dshProf.value;
+  const [bin, args] = rt?.launch ? [rt.launch.node, [rt.launch.script, '--profile', 'headless', '--dump-config']] : [rt?.path, ['--profile', 'headless', '--dump-config']];
+  const out = bin ? await new Promise((ok) => execFile(bin, args, { env, timeout: 60000, encoding: 'utf8', maxBuffer: 16e6 }, (err, so) => ok(err ? '' : so))) : '';
+  const block = /- id: agent-default-model[\s\S]*?(?=\n- id:|\n# ==|$)/.exec(out)?.[0] ?? '';
+  const val = (k) => new RegExp(`^\\s+${k}:\\s*['"]?([^'"\\n]+)`, 'm').exec(block)?.[1]?.trim() ?? null;
+  const value = { provider: val('provider') ?? 'deepseek-official', model: val('model'), effort: val('reasoningEffort') };
+  Object.assign(dshProf, { key, at: Date.now(), value });
+  return value;
+}
+async function dshModels(rt) {
+  const prof = await dshProfile(rt);
+  const key = dshEnv(rt).DEEPSEEK_API_KEY ?? process.env.DEEPSEEK_API_KEY;
+  let ids = [];
+  if (key) {
+    try {
+      const res = await fetch('https://api.deepseek.com/models', { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) });
+      if (res.ok) ids = ((await res.json()).data ?? []).map((m) => m.id).filter(Boolean);
+    } catch { /* offline: the profile's model only */ }
+  }
+  if (prof.model && !ids.includes(prof.model)) ids.unshift(prof.model);
+  return {
+    configurable: true,
+    models: [{ id: '', label: 'domyślny agenta', efforts: DSH_EFFORTS }, ...ids.map((id) => ({ id, label: DSH_NAMES[id] ?? id, note: [id, id === prof.model ? 'model profilu' : ''].filter(Boolean).join(' · '), efforts: DSH_EFFORTS }))],
+    defaultModel: prof.model, defaultEffort: prof.effort ?? 'high', effortLabel: 'reasoning',  // DeepSeek's own default when the profile names none
+    source: key ? 'API DeepSeek i profil DeepSeek Harness' : 'profil DeepSeek Harness',
+  };
+}
+function dshPatch(rt, model, effort) {
+  const prof = dshProf.value ?? { provider: 'deepseek-official', model: null, effort: null };  // read when the models were listed
+  const dir = join(tmpdir(), 'spectrahub-dsh');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = join(dir, `${(model || prof.model || 'default').replace(/[^\w.-]/g, '_')}-${effort || prof.effort || 'default'}.yml`);
+  const lines = ['- id: agent-default-model', '  name: "@deepseek-ai/dsh-agent-default-model"', '  config:', `    provider: ${prof.provider}`];
+  if (model || prof.model) lines.push(`    model: ${model || prof.model}`);
+  if (effort || prof.effort) lines.push(`    reasoningEffort: ${effort || prof.effort}`);
+  writeFileSync(file, lines.join('\n') + '\n', { mode: 0o600 });
+  return file;
+}
+
+const MODEL_SOURCES = { claude: claudeModels, codex: codexModels, openclaw: openclawModels, dsh: dshModels };
 
 // Each runtime's list is read on its own and cached; a slow CLI never holds up the others.
 // Returns what is ready now, with `pending` naming the runtimes still being read.
@@ -373,14 +447,25 @@ const CLAUDE_TOOLS = {
 const claude = {
   argv(ref, started, o = {}) {
     const perm = PERMS.includes(o.perm) ? o.perm : 'full';
-    return ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+    return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+      '--permission-prompt-tool', 'stdio',  // anything outside the allowed tools is asked about in the chat
       '--permission-mode', perm === 'read' ? 'default' : 'acceptEdits',
       ...(o.model ? ['--model', o.model] : []), ...(o.effort ? ['--effort', o.effort] : []),
       ...(started ? ['--resume', ref] : ['--session-id', ref]),
       '--allowedTools', ...CLAUDE_TOOLS[perm]];
   },
-  stdin: true,
+  stdin: 'json',  // the message goes as one JSON line; stdin stays open for answers until the result
   line(d, emit) {
+    if (d.type === 'control_request') {
+      const r = d.request ?? {};
+      if (r.subtype !== 'can_use_tool') return emit({ type: 'control-reply', id: d.request_id, error: 'nieobsługiwane w SpectraHub' });
+      const question = r.tool_name === 'AskUserQuestion' && Array.isArray(r.input?.questions);
+      return emit({ type: 'ask', id: d.request_id, kind: question ? 'question' : 'permission', tool: r.display_name ?? r.tool_name, toolName: r.tool_name,
+        title: question ? '' : titleOf(r.input), description: r.description ?? r.input?.description ?? '', path: r.blocked_path ?? null,
+        questions: question ? r.input.questions.map((q) => ({ question: q.question, header: q.header ?? '', multi: Boolean(q.multiSelect),
+          options: (q.options ?? []).map((o) => ({ label: o.label, description: o.description ?? '' })) })) : null,
+        always: (r.permission_suggestions ?? []).length > 0, input: r.input, suggestions: r.permission_suggestions ?? [] });
+    }
     const ev = d.type === 'stream_event' ? d.event : null;
     if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta') emit({ type: 'text', s: ev.delta.text });
     else if (ev?.type === 'content_block_start' && ev.content_block?.type === 'text') emit({ type: 'text', s: '', block: true });
@@ -497,8 +582,8 @@ const codex = {
 
 // DeepSeek Harness: thinking, tool calls with results and tokens per step, from the headless profile.
 const dsh = {
-  argv(ref, started) {
-    return ['--profile', 'headless', '--json', ...(started ? ['--session-id', ref] : []), '-'];
+  argv(ref, started, o = {}) {
+    return ['--profile', 'headless', ...(o.patch ? ['--patch', o.patch] : []), '--json', ...(started ? ['--session-id', ref] : []), '-'];
   },
   stdin: true,
   line(d, emit) {
@@ -599,6 +684,21 @@ function openclawLimits(perm) {
   return { ...readEnvFile(join(openclawHome(), '.env')), OPENCLAW_CONFIG_PATH: file, OPENCLAW_INCLUDE_ROOTS: dirname(main) };
 }
 
+// The owner's answer to a prompt, as Claude Code expects it back on stdin. "Always" keeps the
+// suggested rules for this session only: SpectraHub never writes the agent's settings.
+claude.answer = (ask, decision, answers) => {
+  let response;
+  if (decision === 'deny') response = { behavior: 'deny', message: 'Użytkownik odmówił w SpectraHub.' };
+  else {
+    response = { behavior: 'allow', updatedInput: answers ? { ...ask.input, answers } : ask.input };
+    if (decision === 'always') {
+      const perms = ask.suggestions.filter((x) => ['addRules', 'addDirectories', 'setMode'].includes(x.type)).map((x) => ({ ...x, destination: 'session' }));
+      if (perms.length) response.updatedPermissions = perms;
+    }
+  }
+  return { type: 'control_response', response: { subtype: 'success', request_id: ask.id, response } };
+};
+
 const ADAPTERS = { claude, codex, openclaw, dsh };
 export { ADAPTERS as adapters };  // for tests
 
@@ -628,12 +728,16 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
   if (rt.id === 'dsh') env.DSH_PERMISSION_MODE = { read: 'read-only', write: 'workspace-write', full: 'danger-full-access' }[perm] ?? 'workspace-write';
   if (rt.id === 'openclaw' && (perm === 'read' || perm === 'write')) Object.assign(env, openclawLimits(perm));
   for (const k of drop) delete env[k];  // e.g. an API key that must not override the subscription
-  const opts = { agent: rt.agent, file, model, effort, images, perm };
+  const opts = { agent: rt.agent, file, model, effort, images, perm, patch: rt.id === 'dsh' && (model || effort) ? dshPatch(rt, model, effort) : null };
   const [bin, args] = l ? [l.node, [l.script, ...a.argv(ref, started, opts)]] : [rt.path, a.argv(ref, started, opts)];
   const child = spawn(bin, args, {
     cwd: ownCwd ? cwd : l?.cwd ?? cwd, env, stdio: [a.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
-  if (a.stdin) child.stdin.end(prompt);
+  // Prompts the agent sends while it works wait here for the owner's answer.
+  const asks = new Map();
+  const write = (obj) => { if (!child.stdin.destroyed && child.stdin.writable) child.stdin.write(JSON.stringify(obj) + '\n'); };
+  if (a.stdin === 'json') write({ type: 'user', message: { role: 'user', content: prompt } });
+  else if (a.stdin) child.stdin.end(prompt);
 
   // Live steps from a file the agent appends to while it works (OpenClaw).
   let tailTimer = null;
@@ -665,7 +769,12 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
   let all = '';
   let err = '';
   const finish = (e) => { if (!done) { done = true; emit(e); } };
-  const relay = (e) => (e.type === 'done' ? finish(e) : emit(e));
+  const relay = (e) => {
+    if (e.type === 'control-reply') return write({ type: 'control_response', response: { subtype: 'error', request_id: e.id, error: e.error } });
+    if (e.type === 'ask') { asks.set(e.id, e); const { input: _i, suggestions: _s, ...shown } = e; return emit(shown); }
+    if (e.type === 'done') { if (a.stdin === 'json') child.stdin.end(); return finish(e); }
+    return emit(e);
+  };
   child.stdout.on('data', (chunk) => {
     const s = chunk.toString('utf8');
     if (!a.line) {
@@ -699,5 +808,14 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
       finish({ type: 'done' });
     }
   });
-  return () => { if (!done) child.kill('SIGTERM'); };
+  const stop = () => { if (!done) child.kill('SIGTERM'); };
+  // answer(id, 'allow' | 'always' | 'deny', answers?) → false when nothing waits under that id
+  stop.answer = (id, decision, answers) => {
+    const ask = asks.get(id);
+    if (!ask || done || !a.answer) return false;
+    asks.delete(id);
+    write(a.answer(ask, decision, answers));
+    return true;
+  };
+  return stop;
 }

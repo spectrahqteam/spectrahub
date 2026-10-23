@@ -14,17 +14,44 @@ const keyLog = join(dir, 'claude-key.log');
 const fakeClaude = `#!${process.execPath}
 const fs = require('fs');
 if (process.argv.includes('--version')) { console.log('9.9.9 (fake)'); process.exit(0); }
+if (process.argv.includes('--help')) { console.log('  --effort <level>  Effort level (low, medium, high, xhigh, max)'); process.exit(0); }
 fs.appendFileSync(${JSON.stringify(argsLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');
-let input = '';
-process.stdin.on('data', (c) => { input += c; });
-process.stdin.on('end', () => {
-  const last = input.trim().split('\\n').filter((l) => l && !l.startsWith('(SpectraHub:')).pop();
-  const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+let buf = '';
+let handled = false;
+let waiting = null;
+process.stdin.on('data', (c) => {
+  buf += c;
+  let i;
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const line = buf.slice(0, i);
+    buf = buf.slice(i + 1);
+    let o;
+    try { o = JSON.parse(line); } catch { continue; }
+    if (o.type === 'control_response' && waiting) { const w = waiting; waiting = null; w(o.response.response); }
+    else if (o.type === 'user' && !handled) { handled = true; turn(String(o.message.content)); }
+  }
+});
+function reply(text) {
+  out({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'text' } } });
+  out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } });
+  out({ type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0.01, duration_ms: 5, usage: { input_tokens: 10, output_tokens: 3 } });
+}
+function turn(input) {
   fs.appendFileSync(${JSON.stringify(keyLog)}, (process.env.ANTHROPIC_API_KEY ?? '-') + '\\n');
+  fs.writeFileSync(${JSON.stringify(join(dir, 'last-prompt.txt'))}, input);
   if (input.includes('LIMIT') && !process.env.ANTHROPIC_API_KEY) {
     out({ type: 'result', subtype: 'success', is_error: true, result: 'Claude AI usage limit reached|1792700000' });
     return;
   }
+  if (input.includes('Ankieta od użytkownika')) return reply('2\\nBo druga opcja jest prostsza.');
+  if (input.includes('ASK')) {
+    out({ type: 'control_request', request_id: 'req-1', request: { subtype: 'can_use_tool', tool_name: 'Bash', display_name: 'Bash', input: { command: 'touch /tmp/x', description: 'Create x' },
+      description: 'Create x', permission_suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'touch /tmp/x' }], behavior: 'allow', destination: 'localSettings' }], tool_use_id: 'tu9' } });
+    waiting = (r) => reply('decision: ' + r.behavior + ' ' + JSON.stringify(r.updatedPermissions ?? null));
+    return;
+  }
+  const last = input.trim().split('\\n').filter((l) => l && !l.startsWith('(SpectraHub:')).pop();
   out({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'text' } } });
   for (const part of ['echo: ', last]) out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: part } } });
   out({ type: 'assistant', message: { id: 'm1', content: [{ type: 'thinking', thinking: 'najpierw przeczytam plik' }] } });
@@ -33,8 +60,7 @@ process.stdin.on('end', () => {
   out({ type: 'assistant', message: { id: 'm2', content: [{ type: 'tool_use', id: 'tu2', name: 'Edit', input: { file_path: '/tmp/y', old_string: 'a', new_string: 'b' } }] } });
   out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu2', content: [{ type: 'text', text: 'edited' }] }] } });
   out({ type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0.01, duration_ms: 5, usage: { input_tokens: 10, output_tokens: 3 } });
-  fs.writeFileSync(${JSON.stringify(join(dir, 'last-prompt.txt'))}, input);
-});
+}
 `;
 
 let server;
@@ -337,4 +363,38 @@ test('a limited OpenClaw turn runs embedded with a config that includes the owne
   adapters.openclaw.whole(local, (e) => got.push(e));
   assert.deepEqual(got.map((e) => e.type), ['text', 'usage', 'done']);
   assert.equal(got[1].model, 'deepseek/v4');
+});
+
+test('an agent asks for permission while it works and the owner answers in the chat', async () => {
+  const { session } = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ agents: ['claude'] }) })).json();
+  await api(`/api/sessions/${session.id}/send`, { method: 'POST', body: JSON.stringify({ to: ['claude'], text: 'ASK about it' }) });
+  let ask;
+  for (let i = 0; i < 100 && !ask; i++) {
+    const { session: s } = await (await api(`/api/sessions/${session.id}`)).json();
+    ask = s.log.at(-1).items?.find((x) => x.k === 'ask');
+    if (!ask) await new Promise((r) => setTimeout(r, 50));
+  }
+  assert.deepEqual([ask.kind, ask.tool, ask.title, ask.status, ask.always], ['permission', 'Bash', 'touch /tmp/x', 'waiting', true]);
+  const say = (body) => api(`/api/sessions/${session.id}/answer`, { method: 'POST', body: JSON.stringify(body) });
+  assert.equal((await say({ agent: 'claude', ask: ask.id, decision: 'maybe' })).status, 400);
+  assert.equal((await say({ agent: 'claude', ask: ask.id, decision: 'always' })).status, 200);
+  assert.equal((await say({ agent: 'claude', ask: ask.id, decision: 'allow' })).status, 409, 'one answer per question');
+  const s = await waitIdle(session.id);
+  const reply = s.log.at(-1);
+  assert.match(reply.s, /decision: allow/);
+  assert.match(reply.s, /"destination":"session"/, '"always" stays in this session; the agent\'s settings are not written');
+  assert.equal(reply.items.find((x) => x.k === 'ask').status, 'always');
+});
+
+test('a poll: every agent picks an option and says why; the owner can vote too', async () => {
+  const { session } = await (await api('/api/sessions', { method: 'POST', body: JSON.stringify({ agents: ['claude'] }) })).json();
+  assert.equal((await api(`/api/sessions/${session.id}/poll`, { method: 'POST', body: JSON.stringify({ question: 'Który?', options: ['A'] }) })).status, 400);
+  assert.equal((await api(`/api/sessions/${session.id}/poll`, { method: 'POST', body: JSON.stringify({ question: 'Który wybrać?', options: ['Pierwszy', 'Drugi'] }) })).status, 202);
+  let s = await waitIdle(session.id);
+  const p = s.log.find((e) => e.poll);
+  assert.match(readFileSync(join(dir, 'last-prompt.txt'), 'utf8'), /1\) Pierwszy\n2\) Drugi/);
+  assert.deepEqual(p.poll.votes.claude, { option: 1, reason: 'Bo druga opcja jest prostsza.' });
+  assert.equal((await api(`/api/sessions/${session.id}/vote`, { method: 'POST', body: JSON.stringify({ n: p.n, option: 0 }) })).status, 200);
+  s = (await (await api(`/api/sessions/${session.id}`)).json()).session;
+  assert.equal(s.log.find((e) => e.poll).poll.votes.you.option, 0);
 });

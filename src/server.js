@@ -17,7 +17,7 @@ import * as fsview from './fsview.js';
 import { agentFiles, history, saveAgentFile } from './agentfiles.js';
 import {
   attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, recentFiles, runs, saveUpload,
-  send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession,
+  answer as answerAsk, send as sendTo, sessionFile, stop as stopRun, subscribe, updateProject, updateSession, vote as votePoll,
 } from './sessions.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -398,6 +398,25 @@ async function sessionRoute(req, res, url, config, json) {
     if (!b || typeof b.text !== 'string' || !b.text.trim() || !Array.isArray(b.to)) return send(res, 400, 'bad request');
     const r = await sendTo(config, id, { to: b.to, text: b.text.slice(0, 20000), attachments: Array.isArray(b.attachments) ? b.attachments.slice(0, 20) : [] });
     return r.error ? json(r.code ?? 400, r) : json(202, r);
+  }
+  // A poll for the agents: a question and 2–6 options; each agent answers with one and why.
+  if (action === 'poll' && req.method === 'POST') {
+    const b = await body();
+    const options = Array.isArray(b?.options) ? b.options.map((o) => String(o).trim().slice(0, 200)).filter(Boolean) : [];
+    if (!b || typeof b.question !== 'string' || !b.question.trim() || options.length < 2 || options.length > 6) return send(res, 400, 'bad request');
+    const r = await sendTo(config, id, { to: Array.isArray(b.to) && b.to.length ? b.to : ['all'], text: b.question.trim().slice(0, 1000), poll: { options } });
+    return r.error ? json(r.code ?? 400, r) : json(202, r);
+  }
+  if (action === 'vote' && req.method === 'POST') {
+    const b = (await body()) ?? {};
+    const r = votePoll(config, id, b.n, b.option);
+    return r.error ? json(r.code ?? 400, r) : json(200, r);
+  }
+  // The owner answers a permission prompt or a question an agent sent while it works.
+  if (action === 'answer' && req.method === 'POST') {
+    const b = (await body()) ?? {};
+    const r = answerAsk(config, id, { agent: b.agent, ask: b.ask, decision: b.decision, answers: b.answers });
+    return r.error ? json(r.code ?? 400, r) : json(200, r);
   }
   if (action === 'stop' && req.method === 'POST') {
     const b = (await body()) ?? {};

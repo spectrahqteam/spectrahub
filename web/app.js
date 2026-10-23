@@ -569,9 +569,11 @@ function entryEl(e) {
     line.append(el('span', 'body', e.s));
     d.append(line);
     if (e.files?.length) { const fl = el('div', 'files'); for (const id of e.files) { const f = fileById(id); if (f) fl.append(fileChip(f)); } d.append(fl); }
+    if (e.poll) { const card = el('div', 'poll'); renderPoll(card, e); d.append(card); }
     return d;
   }
   d.classList.add('agent');
+  if (e.vote) d.classList.add('vote');  // a poll answer: its card says it all, the reply folds to one line
   d.style.setProperty('--c', color(e.who));
   const head = el('div', 'a-head');
   const who = el('span', 'who');
@@ -579,6 +581,7 @@ function entryEl(e) {
   head.append(who);
   if (e.usage?.model) head.append(el('small', 'a-model', e.usage.model));
   d._head = head;
+  if (e.vote) head.addEventListener('click', () => d.classList.toggle('open'));
   d.append(head);
   d._tl = el('div', 'tl');
   d.append(d._tl);
@@ -589,7 +592,7 @@ function entryEl(e) {
   d._acts = el('div', 'acts');
   d.append(d._files, d._meta, d._acts);
   d._entry = e;
-  if (e.items) for (const it of e.items) it.k === 'text' ? addText(d, it.s) : upsertStep(d, it);
+  if (e.items) for (const it of e.items) it.k === 'text' ? addText(d, it.s) : it.k === 'ask' ? upsertAsk(d, it) : upsertStep(d, it);
   else { for (const t of e.tools ?? []) upsertStep(d, { id: t, kind: 'tool', name: t.split(' ')[0], title: t.split(' ').slice(1).join(' '), status: 'ok' }); addText(d, e.s); }
   d._usage = e.usage ?? null;
   d._ms = e.ms ?? null;
@@ -599,6 +602,7 @@ function entryEl(e) {
 
 function addText(d, text) {
   if (!text) return;
+  if (d._live) setPhase(d, 'Pisze');
   if (!d._last) { d._last = el('div', 'body'); d._tl.append(d._last); }
   d._last.textContent += text;
 }
@@ -616,6 +620,10 @@ function upsertStep(d, st) {
     d._last = null;
   }
   row._st = st;
+  if (d._live) {
+    if (st.status === 'running' || !st.status) setPhase(d, { think: 'Myśli', edit: 'Edytuje', todo: 'Planuje' }[st.kind] ?? 'Pracuje', st.kind === 'think' ? '' : st.kind === 'edit' ? st.diff?.path ?? st.title ?? '' : st.title ?? st.name ?? '');
+    else setPhase(d, 'Myśli');
+  }
   const open = row.classList.contains('open') || st.kind === 'todo';
   row.className = `step k-${st.kind} s-${st.status ?? 'running'}${open ? ' open' : ''}`;
   const [head, body] = row.children;
@@ -655,7 +663,7 @@ function renderMeta(d, status) {
   if (u.input || u.output) parts.push(`${tok(u.input ?? 0)} → ${tok(u.output ?? 0)} tok`);
   if (u.cost != null) parts.push(`$${Number(u.cost).toFixed(2)}`);
   if (d._entry?.via === 'api') parts.push('klucz API');
-  d._meta.textContent = parts.length ? (status === 'running' ? 'w toku · ' : '') + parts.join(' · ') : '';
+  d._meta.textContent = status === 'running' ? '' : [status === 'done' ? (d._entry?.vote ? '✓ zagłosował w ankiecie' : '✓ skończył') : status === 'error' ? '✗ przerwał' : '', ...parts].filter(Boolean).join(' · ');
   if (u.model && !d._head.querySelector('.a-model')) d._head.append(el('small', 'a-model', u.model));
 }
 
@@ -707,7 +715,7 @@ function foldWork(d) {
   const head = el('button', 'wk-head');
   head.type = 'button';
   head.append(el('span', 'wk-ic', '▸'), el('b', null, 'Praca'),
-    el('span', 'wk-sum', [`${steps} ${steps === 1 ? 'krok' : steps < 5 ? 'kroki' : 'kroków'}`, d._ms != null ? `${(d._ms / 1000).toFixed(1)} s` : '', errors ? `${errors} ✗` : ''].filter(Boolean).join(' · ')));
+    el('span', 'wk-sum', [steps ? `${steps} ${steps === 1 ? 'krok' : steps < 5 ? 'kroki' : 'kroków'}` : 'myślenie', d._ms != null ? `${(d._ms / 1000).toFixed(1)} s` : '', errors ? `${errors} ✗` : ''].filter(Boolean).join(' · ')));
   head.addEventListener('click', () => work.classList.toggle('open'));
   const body = el('div', 'wk-body');
   body.append(...inside);
@@ -757,13 +765,212 @@ function tidyLog() {
 function finish(d, status, error) {
   if (!d._tl) return;
   d.querySelector(':scope > .live')?.remove();
+  clearInterval(d._tick);
+  d._live = null;
+  d.classList.toggle('running', status === 'running');
   d.querySelector(':scope > .errline')?.remove();
-  if (status === 'running') d._files.before(el('span', 'live'));
+  if (status === 'running') d._head.after(liveBar(d));
   if (error) d._files.before(el('div', 'errline', error));
   if (status === 'done' && !d._tl.querySelector('.body') && !error && !d._steps.size) addText(d, '(bez odpowiedzi tekstowej)');
   renderMeta(d, status);
   renderFooter(d, status);
   if (status !== 'running') foldWork(d);
+}
+
+// While an agent works: its colour dots, what it does now ("Myśli", "Pracuje: …", "Pisze",
+// "Czeka na Twoją decyzję"), how many steps and how long. The steps stay folded until asked for.
+function liveBar(d) {
+  const bar = el('button', 'live livebar');
+  bar.type = 'button';
+  const dots = el('span', 'dots');
+  dots.append(el('i'), el('i'), el('i'));
+  const label = el('span', 'lb-label');
+  const detail = el('span', 'lb-detail');
+  const count = el('small', 'lb-count');
+  bar.append(dots, label, detail, count, el('span', 'lb-chev', '▸'));
+  bar.addEventListener('click', () => d.classList.toggle('show-steps'));
+  const start = Date.parse(d._entry?.at ?? '') || Date.now();
+  d._live = { bar, label, detail, count };
+  const tick = () => {
+    const sec = Math.max(0, Math.floor((Date.now() - start) / 1000));
+    const n = [...d._steps.values()].filter((r) => !r.classList.contains('k-think')).length;
+    count.textContent = [n ? `${n} ${n === 1 ? 'krok' : n < 5 ? 'kroki' : 'kroków'}` : '', sec >= 60 ? `${Math.floor(sec / 60)} min ${sec % 60} s` : `${sec} s`].filter(Boolean).join(' · ');
+  };
+  d._tick = setInterval(tick, 1000);
+  tick();
+  paintPhase(d);
+  return bar;
+}
+function setPhase(d, phase, detail = '') { d._phase = [phase, detail]; paintPhase(d); }
+function paintPhase(d) {
+  if (!d._live) return;
+  const waiting = d._tl.querySelector(':scope > .ask.waiting');
+  const [phase, detail] = waiting ? ['Czeka na Twoją decyzję', ''] : d._phase ?? ['Myśli', ''];
+  d._live.label.textContent = phase;
+  d._live.detail.textContent = detail;
+  d._live.bar.classList.toggle('wait', Boolean(waiting));
+}
+
+// What an agent asks while it works: a permission (once, for this session, or no) or a question
+// with options. Answered here, it goes straight back to the waiting agent.
+function upsertAsk(d, it) {
+  d._asks ??= new Map();
+  let card = d._asks.get(it.id);
+  if (!card) { card = el('div', 'ask'); d._asks.set(it.id, card); d._tl.append(card); d._last = null; }
+  const who = d._entry.who;
+  card.className = `ask ${it.kind} ${it.status === 'waiting' ? 'waiting' : `done s-${it.status}`}`;
+  card.style.setProperty('--c', color(who));
+  const send = async (decision, answers) => {
+    for (const b of card.querySelectorAll('button')) b.disabled = true;
+    const r = await jpost(`/api/sessions/${chat.s.id}/answer`, { agent: who, ask: it.id, decision, answers });
+    if (!r.ok) { toast((await r.json().catch(() => ({}))).error ?? 'nie dotarło do agenta'); for (const b of card.querySelectorAll('button')) b.disabled = false; }
+  };
+  if (it.status !== 'waiting') {
+    const text = it.kind === 'question'
+      ? (it.status === 'answered' ? `Odpowiedziano: ${Object.values(it.answers ?? {}).join(' · ')}` : it.status === 'denied' ? 'Pytanie pominięte' : 'Pytanie bez odpowiedzi')
+      : `${{ allowed: 'Zezwolono raz', always: 'Zezwolono w tej sesji', denied: 'Odmówiono', expired: 'Bez odpowiedzi' }[it.status] ?? it.status}: ${it.tool}${it.title ? ` · ${it.title}` : ''}`;
+    card.replaceChildren(el('span', 'ask-ic', it.status === 'denied' || it.status === 'expired' ? '✗' : '✓'), el('span', 'ask-done', text));
+  } else if (it.kind === 'question') {
+    const picked = new Map();
+    const nodes = [el('div', 'ask-head', `${nameOf(who)} pyta`)];
+    for (const q of it.questions ?? []) {
+      if (q.header) nodes.push(el('small', 'ask-tag', q.header));
+      nodes.push(el('b', 'ask-q', q.question));
+      const opts = el('div', 'ask-opts');
+      for (const o of q.options) {
+        const b = el('button', 'ask-opt');
+        b.type = 'button';
+        b.append(el('span', null, o.label));
+        if (o.description) b.append(el('small', null, o.description));
+        b.addEventListener('click', () => {
+          const cur = picked.get(q.question) ?? [];
+          const next = q.multi ? (cur.includes(o.label) ? cur.filter((x) => x !== o.label) : [...cur, o.label]) : [o.label];
+          picked.set(q.question, next);
+          for (const x of opts.children) x.classList.toggle('on', next.includes(x.firstChild.textContent));
+        });
+        opts.append(b);
+      }
+      const other = el('input', 'ask-other');
+      Object.assign(other, { placeholder: 'albo napisz własną odpowiedź', maxLength: 500 });
+      other.addEventListener('input', () => { if (other.value.trim()) { picked.set(q.question, [other.value.trim()]); for (const x of opts.children) x.classList.remove('on'); } });
+      nodes.push(opts, other);
+    }
+    const row = el('div', 'ask-btns');
+    const go = el('button', 'tb text primary', 'Odpowiedz');
+    go.type = 'button';
+    go.addEventListener('click', () => {
+      const answers = Object.fromEntries((it.questions ?? []).map((q) => [q.question, (picked.get(q.question) ?? []).join(', ')]).filter(([, v]) => v));
+      if (!Object.keys(answers).length) return toast('wybierz odpowiedź');
+      send('allow', answers);
+    });
+    const skip = el('button', 'tb text', 'Pomiń');
+    skip.type = 'button';
+    skip.addEventListener('click', () => send('deny'));
+    row.append(skip, go);
+    card.replaceChildren(...nodes, row);
+  } else {
+    const head = el('div', 'ask-head');
+    head.append(svgIcon(ICON.shield), el('span', null, `Zezwolić ${nameOf(who)} na `), el('b', null, it.tool), el('span', null, '?'));
+    const nodes = [head];
+    if (it.title) nodes.push(el('pre', 'ask-cmd', it.title));
+    if (it.description && it.description !== it.title) nodes.push(el('p', 'ask-desc', it.description));
+    if (it.path) nodes.push(el('small', 'ask-path', `dotyczy: ${it.path}`));
+    const row = el('div', 'ask-btns');
+    const btn = (label, decision, cls = 'tb text') => { const b = el('button', cls, label); b.type = 'button'; b.addEventListener('click', () => send(decision)); return b; };
+    row.append(btn('Odmów', 'deny'), ...(it.always ? [btn('Zawsze w tej sesji', 'always')] : []), btn('Zezwól raz', 'allow', 'tb text primary'));
+    card.replaceChildren(...nodes, row);
+  }
+  paintPhase(d);
+}
+
+// A poll in the conversation: options as bars with who chose them, each agent's reason below.
+// Tapping an option is the owner's own vote.
+function renderPoll(card, e) {
+  const p = e.poll;
+  const votes = Object.entries(p.votes ?? {});
+  const cast = votes.filter(([, v]) => v.option != null);
+  const head = el('div', 'poll-head');
+  head.append(svgIcon(ICON.chart), el('b', null, 'Ankieta'), el('small', null, `${cast.length} ${cast.length === 1 ? 'głos' : cast.length > 1 && cast.length < 5 ? 'głosy' : 'głosów'}`));
+  const opts = el('div', 'poll-opts');
+  const top = Math.max(1, ...p.options.map((_, i) => cast.filter(([, v]) => v.option === i).length));
+  p.options.forEach((o, i) => {
+    const who = cast.filter(([, v]) => v.option === i).map(([k]) => k);
+    const b = el('button', `poll-opt${p.votes?.you?.option === i ? ' mine' : ''}${who.length === top && who.length ? ' lead' : ''}`);
+    b.type = 'button';
+    b.style.setProperty('--w', `${Math.round((who.length / Math.max(1, cast.length)) * 100)}%`);
+    const marks = el('span', 'poll-who');
+    for (const a of who) marks.append(a === 'you' ? el('span', 'poll-you', 'Ty') : logo(a));
+    b.append(el('span', 'poll-n', String(i + 1)), el('span', 'poll-label', o), marks, el('small', 'poll-c', String(who.length)));
+    b.addEventListener('click', async () => { const r = await jpost(`/api/sessions/${chat.s.id}/vote`, { n: e.n, option: i }); if (!r.ok) toast('nie udało się zagłosować'); });
+    opts.append(b);
+  });
+  const why = el('div', 'poll-why');
+  for (const a of e.to ?? []) {
+    const v = p.votes?.[a];
+    const row = el('div', 'poll-row');
+    row.style.setProperty('--c', color(a));
+    row.append(logo(a));
+    const t = el('div', 'poll-txt');
+    if (!v) t.append(el('span', 'poll-wait', `${nameOf(a)} głosuje…`));
+    else {
+      t.append(el('b', null, nameOf(a)), el('span', 'poll-pick', v.option != null ? `${v.option + 1}. ${p.options[v.option]}` : 'bez wyboru'));
+      if (v.reason) t.append(el('p', null, v.reason));
+    }
+    row.append(t);
+    why.append(row);
+  }
+  card.replaceChildren(head, el('div', 'poll-q', p.question), opts, why);
+}
+
+function pollSheet() {
+  if (!chat.s) return;
+  const names = Object.keys(chat.s.agents);
+  const f = el('form', 's-form poll-form');
+  const q = el('input');
+  Object.assign(q, { placeholder: 'Pytanie, np. który sposób wybrać?', maxLength: 300, autocomplete: 'off' });
+  const list = el('div', 'poll-inputs');
+  const addOpt = () => {
+    if (list.children.length >= 6) return toast('najwyżej 6 opcji');
+    const row = el('div', 'poll-in');
+    const i = el('input');
+    Object.assign(i, { placeholder: `Opcja ${list.children.length + 1}`, maxLength: 200, autocomplete: 'off' });
+    const x = el('button', 'ib sm');
+    x.type = 'button';
+    x.setAttribute('aria-label', 'Usuń opcję');
+    x.append(svgIcon('<path d="M6 6l12 12M18 6 6 18"/>'));
+    x.addEventListener('click', () => { if (list.children.length > 2) row.remove(); });
+    row.append(i, x);
+    list.append(row);
+  };
+  addOpt();
+  addOpt();
+  const more = el('button', 'tb text');
+  more.type = 'button';
+  more.append(svgIcon(ICON.plus), el('span', null, 'opcja'));
+  more.addEventListener('click', addOpt);
+  const who = new Set(names);
+  const chips = el('div', 'effort');
+  for (const a of names) {
+    const c = el('button', 'eff on');
+    c.type = 'button';
+    c.append(logo(a), el('span', null, nameOf(a)));
+    c.addEventListener('click', () => { if (who.has(a)) who.delete(a); else who.add(a); c.classList.toggle('on', who.has(a)); });
+    chips.append(c);
+  }
+  const go = el('button', 's-primary', 'zapytaj agentów');
+  go.type = 'submit';
+  f.append(q, list, more, el('div', 's-label', 'głosują'), chips, go);
+  f.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const options = [...list.querySelectorAll('input')].map((i) => i.value.trim()).filter(Boolean);
+    if (!q.value.trim() || options.length < 2) return toast('pytanie i co najmniej dwie opcje');
+    if (!who.size) return toast('wybierz, kto głosuje');
+    const r = await jpost(`/api/sessions/${chat.s.id}/poll`, { question: q.value.trim(), options, to: [...who] });
+    if (!r.ok) return toast((await r.json().catch(() => ({}))).error ?? 'nie wysłano');
+    closeSheet();
+  });
+  openSheet('Ankieta', [f, el('p', 's-note', 'Każdy agent wybierze jedną opcję i krótko powie dlaczego. Ty też możesz zagłosować — dotknij opcji w ankiecie.')], { push: sheetStack.length > 0 });
+  setTimeout(() => q.focus(), 250);
 }
 
 let speaking = null;
@@ -822,6 +1029,15 @@ function onEvent(e) {
   else if (e.type === 'files') { s.files = e.files; for (const nd of chat.entries.values()) if (nd._tl) renderFooter(nd, nd.querySelector(':scope > .live') ? 'running' : 'done'); }
   else if (e.type === 'reply-files') { const entry = s.log.find((x) => x.n === e.n); if (entry) entry.files = e.files; if (d?._tl) renderFooter(d, d.querySelector(':scope > .live') ? 'running' : 'done'); }
   else if (e.type === 'limits') { if (s.agents[e.agent]) s.agents[e.agent].limits = e.limits; }
+  else if (e.type === 'ask') {
+    const entry = s.log.find((x) => x.n === e.n);
+    if (entry) { entry.items ??= []; const i = entry.items.findIndex((x) => x.k === 'ask' && x.id === e.item.id); if (i >= 0) entry.items[i] = e.item; else entry.items.push(e.item); }
+    if (d?._tl) stick(() => upsertAsk(d, e.item));
+    if (e.item.status === 'waiting') { navigator.vibrate?.([60, 40, 60]); toast(`${nameOf(e.agent)} czeka na Twoją decyzję`); }
+  } else if (e.type === 'poll') {
+    const entry = s.log.find((x) => x.n === e.n);
+    if (entry) { entry.poll = e.poll; const card = chat.entries.get(e.n)?.querySelector('.poll'); if (card) renderPoll(card, entry); }
+  }
   else if (e.type === 'meta') { for (const [a, m] of Object.entries(e.session.agents ?? {})) Object.assign(s.agents[a] ?? {}, { model: m.model, effort: m.effort }); renderComposer(); }
   else if (e.type === 'deleted') { chat.s = null; showEmpty(); loadSessions(); }
 }
@@ -955,12 +1171,12 @@ function autosize() { cInput.style.height = 'auto'; cInput.style.height = Math.m
 
 // The agent sheet: who gets the next line, and with which model and effort.
 const PERM_INFO = {
-  read: ['Tylko odczyt', 'czyta i odpowiada, niczego nie zmienia', '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/>'],
-  write: ['Zapis w folderze pracy', 'zmienia pliki w miejscu pracy sesji', '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 14l5-5 1.5 1.5-5 5H9z"/>'],
+  read: ['Tylko odczyt', 'czyta sam; o zmiany pyta Ciebie', '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="m9 12 2 2 4-4"/>'],
+  write: ['Zapis w folderze pracy', 'zmienia pliki w miejscu pracy sesji; o resztę pyta', '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 14l5-5 1.5 1.5-5 5H9z"/>'],
   full: ['Pełny dostęp', 'wszystko, co agent potrafi na serwerze', '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M12 8v5M12 16h.01"/>'],
 };
 const PERM_NOTE = {
-  claude: { write: 'bez komend powłoki' },
+  claude: { read: 'prośby o zgodę widzisz w czacie', write: 'komendy powłoki po Twojej zgodzie' },
   openclaw: { read: 'bez powłoki, zapisu i zmian konfiguracji', write: 'narzędzia plików w obszarze agenta, bez powłoki', full: 'zasady z konfiguracji OpenClaw' },
 };
 function permSheet(a) {
@@ -1255,7 +1471,8 @@ $('plusBtn').addEventListener('click', () => {
   const tiles = el('div', 'tiles');
   tiles.append(tile(ICON.camera, 'Aparat', 'pickCamera'), tile(ICON.image, 'Zdjęcia', 'pickPhotos'), tile(ICON.file, 'Pliki', 'pickFiles'));
   openSheet('Dodaj', [tiles, el('p', 's-note', 'Pliki trafiają na serwer do tej sesji, a agenci dostają ich ścieżki. Do 25 MB na plik.'),
-    group(item(ICON.shield, 'Uprawnienia agentów', () => {}, { sub: 'pełne — agenci mogą czytać i zmieniać pliki' }))]);
+    group(item(ICON.chart, 'Ankieta', () => pollSheet(), { sub: 'agenci wybierają opcję i mówią dlaczego' }),
+      item(ICON.shield, 'Uprawnienia agentów', () => modelSheet(), { sub: 'co każdy agent może sam, a o co pyta Ciebie' }))]);
 });
 
 // dictation
