@@ -130,6 +130,9 @@ export function deleteProject(config, id) {
 export function updateSession(config, id, patch) {
   const s = load(config, id);
   if (!s) return { error: 'no such session', code: 404 };
+  if (s.terminalAssistant && ('cwd' in patch || Object.values(patch.perms ?? {}).some((perm) => perm !== 'read'))) {
+    return { error: 'Terminal assistants keep their read-only scope and working directory.', code: 403 };
+  }
   if (typeof patch.title === 'string' && patch.title.trim()) { s.title = patch.title.trim().slice(0, 80); s.autoTitle = false; }
   if (typeof patch.pinned === 'boolean') s.pinned = patch.pinned;
   if ('projectId' in patch) {
@@ -313,7 +316,7 @@ function validDir(path) {
   try { return statSync(path).isDirectory() ? normalize(path) : null; } catch { return null; }
 }
 
-export async function createSession(config, { agents, title, cwd, perms = {} }) {
+export async function createSession(config, { agents, title, cwd, perms = {}, terminalAssistant = false }) {
   const ready = (await scan()).filter((r) => r.ready);
   const picked = [...new Set(agents)].filter((id) => ready.some((r) => r.id === id));
   if (!picked.length) return { error: 'no ready agent selected' };
@@ -326,7 +329,8 @@ export async function createSession(config, { agents, title, cwd, perms = {} }) 
     updatedAt: now,
     cwd: validDir(cwd) ?? config.agents?.cwd ?? config.terminal?.cwd ?? homedir(),  // not the service's own folder
     cwdChosen: Boolean(validDir(cwd)),
-    agents: Object.fromEntries(picked.map((id) => [id, { ref: newRef(id), started: false, synced: now, state: 'idle', perm: PERMS.includes(perms[id]) ? perms[id] : 'full' }])),
+    ...(terminalAssistant === true ? { terminalAssistant: true } : {}),
+    agents: Object.fromEntries(picked.map((id) => [id, { ref: newRef(id), started: false, synced: now, state: 'idle', perm: terminalAssistant === true ? 'read' : PERMS.includes(perms[id]) ? perms[id] : 'full' }])),
     log: [{ n: 0, who: 'system', s: `sesja otwarta · agenci: ${picked.join(', ')}`, at: now }],
   };
   sessions.set(s.id, s);
@@ -400,7 +404,7 @@ function manageReply(config, s, agent, mine, reply, rt, { began, prompt, hint, i
     }
     if (auth.via) { reply.via = auth.via; st.via = auth.via; publish(s.id, { type: 'via', n: reply.n, agent, via: auth.via }); }
     const options = { ref: st.ref, started: st.started, prompt: text, cwd: s.cwd, ownCwd: Boolean(s.cwdChosen),
-      model: st.model || null, effort: st.effort || null, perm: st.perm ?? 'full', images, env: { ...env, ...auth.env }, drop: auth.drop };
+      model: st.model || null, effort: st.effort || null, perm: s.terminalAssistant ? 'read' : st.perm ?? 'full', advisory: Boolean(s.terminalAssistant), images, env: { ...env, ...auth.env }, drop: auth.drop };
     const runId = recovered?.id ?? prepareRun(config, rt, options, { began, prompt, hint, images, mine: mine.n });
     reply.run = { id: runId, cursor: recovered?.cursor ?? 0, canFallBack: Boolean(auth.canFallBack) };
     save(config, s);
@@ -570,7 +574,7 @@ export async function send(config, id, { to, text, attachments = [], poll = null
     }
     setState(s, agent, 'busy');
     const images = files.filter((f) => f.type.startsWith('image/')).map((f) => f.path);
-    const hint = st.started ? '' : '\n\n(SpectraHub: jeśli przygotujesz plik dla użytkownika, podaj w odpowiedzi jego pełną ścieżkę — pojawi się w czacie jako plik do otwarcia.)';
+    const hint = s.terminalAssistant || st.started ? '' : '\n\n(SpectraHub: jeśli przygotujesz plik dla użytkownika, podaj w odpowiedzi jego pełną ścieżkę — pojawi się w czacie jako plik do otwarcia.)';
     manageReply(config, s, agent, mine, reply, rt, { began, prompt, hint, images });
   }
   save(config, s);

@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export const VERSION = '0.3.0';
+export const VERSION = '0.3.1';
 
 export function defaultDir() {
   return process.env.SPECTRAHUB_HOME || join(homedir(), '.spectrahub');

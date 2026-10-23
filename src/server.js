@@ -17,6 +17,7 @@ import * as gmail from './gmail.js';
 import * as fsview from './fsview.js';
 import * as hosts from './hosts.js';
 import * as pty from './pty.js';
+import { getAssistant, askAssistant } from './terminal-assistant.js';
 import { agentFiles, history, saveAgentFile } from './agentfiles.js';
 import {
   attachFile, createProject, createSession, deleteProject, deleteSession, getSession, listProjects, listSessions, recentFiles, runs, saveUpload,
@@ -275,6 +276,8 @@ async function infrastructureRoute(req, res, url, config, json) {
       if (id && action === 'approve' && req.method === 'POST') return json(200, { terminal: await pty.approveTerminal(config, id, await body()) });
       if (id && action === 'input' && req.method === 'POST') { pty.inputTerminal(config, id, await body()); return json(200, { ok: true }); }
       if (id && action === 'resize' && req.method === 'POST') { pty.resizeTerminal(config, id, await body()); return json(200, { ok: true }); }
+      if (id && action === 'assistant' && req.method === 'GET') return json(200, await getAssistant(config, id));
+      if (id && action === 'assistant' && req.method === 'POST') return json(202, await askAssistant(config, id, await body()));
       if (id && action === 'events' && req.method === 'GET') {
         pty.getTerminal(config, id);
         res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no', Connection: 'keep-alive' });

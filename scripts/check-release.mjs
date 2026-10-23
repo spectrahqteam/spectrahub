@@ -24,7 +24,7 @@ for (const file of files) {
 }
 const pack = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], { cwd: root, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }))[0];
 for (const file of pack.files) if (!packageAllow.test(file.path)) problems.push(`${file.path}: outside the installation allowlist`);
-for (const required of ['bin/spectrahub.js', 'bin/pty-bridge.py', 'src/run-worker.js', 'web/infrastructure.js', 'web/terminal.html', 'docs/INSTALL.md']) {
+for (const required of ['bin/spectrahub.js', 'bin/pty-bridge.py', 'src/run-worker.js', 'src/terminal-assistant.js', 'web/infrastructure.js', 'web/terminal.html', 'web/terminal-assistant.js', 'web/terminal-assistant.css', 'docs/INSTALL.md']) {
   if (!pack.files.some((f) => f.path === required)) problems.push(`${required}: missing from installation`);
 }
 if (problems.length) {

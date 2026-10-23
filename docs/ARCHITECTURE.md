@@ -1,6 +1,6 @@
 # Architecture
 
-Version 0.3.0. Plain browser JavaScript, a Node HTTP server, private JSON state and
+Version 0.3.1. Plain browser JavaScript, a Node HTTP server, private JSON state and
 separate workers for agent turns. No frontend framework or database server.
 
 ```text
@@ -88,6 +88,28 @@ host metadata and identity-file paths, not private keys. Batch authentication an
 host-key checking are mandatory. Monitoring runs a fixed Python read-only collector;
 service names and connection parameters are validated. Remote interactive shells use SSH
 TTY allocation. Host changes invalidate a pending terminal approval.
+
+## Terminal assistance
+
+The **Agenci** panel connects an active PTY to dedicated advisory conversations with
+the available local runtimes. Helpers have a fixed read-only scope and a private local
+working directory. Ordinary conversation APIs cannot elevate their permissions or
+change that directory. Remote-terminal metadata is descriptive: a helper still runs
+on the SpectraHub server, not on the SSH host. Runtime permission and tool controls
+enforce the advisory mode; this is not an independent operating-system isolation boundary.
+
+Terminal output is omitted by default. The owner can capture and inspect a bounded
+snapshot of the visible xterm screen; sending includes exactly that preview. Later
+terminal output is not silently added. The question and selected context go to the
+chosen runtimes and their configured model providers. Context is marked as untrusted
+data. Helper history uses the normal private conversation store and remains accessible
+in Chats after leaving the terminal view.
+
+Agent replies render as text, not trusted HTML. Shell code blocks can populate a
+separate editable proposal. Copying is always available; insertion requires one line
+without control characters and the owner's confirmation that the shell awaits a new
+command. The owner action sends the reviewed text without Enter or clearing the current
+line. Agent events are never wired to PTY input, and execution remains a manual action.
 
 ## Files and integrations
 

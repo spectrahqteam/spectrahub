@@ -132,26 +132,48 @@ async function terminalsPage(hostId = 'local') {
 }
 async function terminalPage(id) {
   const box = infraPage('Terminal', 'Łączenie…', 'shell');
-  let term, fit, observer;
+  let term, fit, observer, assistant;
   const abort = new AbortController();
   let live = true, sequence = 0, outputQueue = Promise.resolve();
-  infrastructureCleanup = () => { live = false; abort.abort(); observer?.disconnect(); term?.dispose(); };
+  infrastructureCleanup = () => { live = false; abort.abort(); observer?.disconnect(); assistant?.dispose(); term?.dispose(); };
   const actions = el('div', 'infra-actions');
   actions.append(infraButton('Terminale', () => terminalsPage(), true), infraButton('Zakończ shell', async () => {
     await infraAPI(`/api/terminal/sessions/${id}`, undefined, 'DELETE');
   }, true));
   box.append(actions);
   const approval = el('div', 'infra-approval'); box.append(approval);
-  const terminalContainer = el('div', 'pty-surface'); box.append(terminalContainer);
+  const workspace = el('div', 'terminal-workspace'); box.append(workspace);
+  const consolePane = el('div', 'terminal-console'); workspace.append(consolePane);
+  const terminalContainer = el('div', 'pty-surface'); consolePane.append(terminalContainer);
   const keys = el('div', 'infra-actions pty-keys');
   const sendInput = (data) => {
-    outputQueue = outputQueue.then(() => infraAPI(`/api/terminal/sessions/${id}/input`, { data })).catch((e) => { if (live) toast(e.message); });
+    outputQueue = outputQueue.catch(() => {}).then(() => infraAPI(`/api/terminal/sessions/${id}/input`, { data })).catch((e) => { if (live) toast(e.message); });
     return outputQueue;
   };
   for (const [label, data] of [['Esc', '\x1b'], ['Tab', '\t'], ['Ctrl+C', '\x03'], ['Ctrl+D', '\x04'], ['↑', '\x1b[A'], ['↓', '\x1b[B']]) keys.append(infraButton(label, () => sendInput(data), true));
-  box.append(keys);
+  consolePane.append(keys);
+  const agentsButton = infraButton('Agenci', () => assistant?.toggle(), true);
+  agentsButton.setAttribute('aria-expanded', 'false');
+  actions.append(agentsButton);
+  assistant = createTerminalAssistant({
+    id, container: workspace,
+    readVisible: () => {
+      if (!term) return '';
+      const buffer = term.buffer.active;
+      return Array.from({ length: term.rows }, (_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? '').join('\n').trimEnd();
+    },
+    insertText: async (data) => {
+      if (!live || !data.trim() || data.length > 4096 || /[\x00-\x1f\x7f-\x9f\u2028\u2029]/.test(data)) throw new Error('Wstaw jedną linię bez znaków sterujących.');
+      // This is deliberately independent of key-input's error-swallowing queue.
+      outputQueue = outputQueue.catch(() => {}).then(() => infraAPI(`/api/terminal/sessions/${id}/input`, { data }));
+      return outputQueue;
+    },
+    focusTerminal: () => term?.focus(),
+    onToggle: (open) => { workspace.classList.toggle('with-assistant', open); agentsButton.setAttribute('aria-expanded', String(open)); },
+  });
   const showState = (t) => {
     if (!live) return;
+    assistant.updateTerminal(t);
     subEl.textContent = `${t.hostId} · ${TERMINAL_STATES[t.state] ?? t.state}`;
     approval.replaceChildren();
     if (t.state === 'pending') {
@@ -199,7 +221,7 @@ async function terminalPage(id) {
           } else if (event.type === 'data' && (!event.seq || event.seq > sequence)) {
             sequence = event.seq ?? sequence; term.write(event.data);
           } else if (event.terminal) showState(event.terminal);
-          else if (event.type === 'exit') { term.options.disableStdin = true; subEl.textContent = `zakończony · kod ${event.code ?? '—'}`; }
+          else if (event.type === 'exit') { term.options.disableStdin = true; assistant.updateTerminal({ ...terminal, state: 'exited' }); subEl.textContent = `zakończony · kod ${event.code ?? '—'}`; }
         });
       } catch (error) { if (!live || error.name === 'AbortError') break; subEl.textContent = 'Połączenie przerwane — ponawianie…'; }
       if (live) await sleep(1500);

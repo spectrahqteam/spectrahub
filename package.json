@@ -1,6 +1,6 @@
 {
   "name": "spectrahub",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Self-hosted open-source command center for your own VPS: chat, terminal, files, servers, agents.",
   "license": "MIT",
   "type": "module",

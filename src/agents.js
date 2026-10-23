@@ -479,10 +479,12 @@ const claude = {
     const perm = PERMS.includes(o.perm) ? o.perm : 'full';
     const asks = o.asks !== false;  // anything outside the allowed tools is asked about in the chat
     return ['-p', ...(asks ? ['--input-format', 'stream-json', '--permission-prompt-tool', 'stdio'] : []), '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-      '--permission-mode', perm === 'read' ? 'default' : 'acceptEdits',
+      '--permission-mode', o.advisory ? 'plan' : perm === 'read' ? 'default' : 'acceptEdits',
       ...(o.model ? ['--model', o.model] : []), ...(o.effort ? ['--effort', o.effort] : []),
       ...(started ? ['--resume', ref] : ['--session-id', ref]),
-      '--allowedTools', ...CLAUDE_TOOLS[perm]];
+      ...(o.advisory
+        ? ['--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}']
+        : ['--allowedTools', ...CLAUDE_TOOLS[perm]])];
   },
   stdin: 'json',  // the message goes as one JSON line; stdin stays open for answers until the result
   line(d, emit) {
@@ -738,6 +740,9 @@ export function newRef(id) {
 
 // Runs one turn. `emit` receives {type: text|step|step-end|usage|limits|error|ref|done}; the returned function stops it.
 export function turn(rt, options, emit) {
+  // Advisory sessions never inherit a wider permission chosen elsewhere in the app.
+  // This is a runtime restriction, not operating-system isolation from its own account.
+  if (options.advisory) options = { ...options, perm: 'read' };
   const { ref, started, prompt, cwd, model, effort, images, perm = 'read', ownCwd = false, env: extra = {}, drop = [] } = options;
   // OpenClaw's gateway exposes native exec prompts but does not constrain every plugin/tool
   // per invocation. The owner explicitly authorizes the selected scope for ONE turn first.
@@ -803,7 +808,7 @@ export function turn(rt, options, emit) {
   return legacyTurn(rt, options, emit);
 }
 
-function legacyTurn(rt, { ref, started, prompt, cwd, model, effort, images, perm, ownCwd = false, env: extra = {}, drop = [] }, emit) {
+function legacyTurn(rt, { ref, started, prompt, cwd, model, effort, images, perm, advisory = false, ownCwd = false, env: extra = {}, drop = [] }, emit) {
   const a = Object.create(ADAPTERS[rt.id]);  // per-run state (e.g. dsh: did text already stream)
   let file = null;
   if (rt.id === 'openclaw') {
@@ -818,7 +823,7 @@ function legacyTurn(rt, { ref, started, prompt, cwd, model, effort, images, perm
   if (rt.id === 'dsh') env.DSH_PERMISSION_MODE = { read: 'read-only', write: 'workspace-write', full: 'danger-full-access' }[perm] ?? 'workspace-write';
   if (rt.id === 'openclaw' && (perm === 'read' || perm === 'write')) Object.assign(env, openclawLimits(perm));
   for (const k of drop) delete env[k];  // e.g. an API key that must not override the subscription
-  const opts = { agent: rt.agent, file, model, effort, images, perm, asks: rt.asks, patch: rt.id === 'dsh' && (model || effort) ? dshPatch(rt, model, effort) : null };
+  const opts = { agent: rt.agent, file, model, effort, images, perm, advisory, asks: rt.asks, patch: rt.id === 'dsh' && (model || effort) ? dshPatch(rt, model, effort) : null };
   const [bin, args] = l ? [l.node, [l.script, ...a.argv(ref, started, opts)]] : [rt.path, a.argv(ref, started, opts)];
   const child = spawn(bin, args, {
     cwd: ownCwd ? cwd : l?.cwd ?? cwd, env, stdio: [a.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
@@ -862,7 +867,11 @@ function legacyTurn(rt, { ref, started, prompt, cwd, model, effort, images, perm
   const finish = (e) => { if (!done) { done = true; emit(e); } };
   const relay = (e) => {
     if (e.type === 'control-reply') return write({ type: 'control_response', response: { subtype: 'error', request_id: e.id, error: e.error } });
-    if (e.type === 'ask') { asks.set(e.id, e); const { input: _i, suggestions: _s, ...shown } = e; return emit(shown); }
+    if (e.type === 'ask') {
+      // A tool request cannot widen an advisory turn, even if an older peer ignores --tools.
+      if (advisory && e.kind !== 'question') return write(a.answer(e, 'deny'));
+      asks.set(e.id, e); const { input: _i, suggestions: _s, ...shown } = e; return emit(shown);
+    }
     if (e.type === 'done') { if (jsonIn) child.stdin.end(); return finish(e); }
     return emit(e);
   };

@@ -104,6 +104,25 @@ test('agents and sessions need the owner token', async () => {
   assert.equal((await fetch(`${base}/api/sessions`)).status, 401);
 });
 
+test('terminal helper sessions retain their advisory scope through the ordinary chat API', async () => {
+  const { createSession } = await import('../src/sessions.js');
+  const config = { dir, agents: { cwd: dir } };
+  const { session } = await createSession(config, { agents: ['claude'], cwd: dir, terminalAssistant: true, perms: { claude: 'full' } });
+  assert.equal(session.terminalAssistant, true);
+  assert.equal(session.agents.claude.perm, 'read');
+  for (const patch of [{ perms: { claude: 'full' } }, { perms: { claude: 'write' } }, { cwd: dir }]) {
+    assert.equal((await api(`/api/sessions/${session.id}`, { method: 'PATCH', body: JSON.stringify(patch) })).status, 403);
+  }
+  assert.equal((await api(`/api/sessions/${session.id}/send`, { method: 'POST', body: JSON.stringify({ to: ['claude'], text: 'Explain a shell command.' }) })).status, 202);
+  const finished = await waitIdle(session.id);
+  assert.equal(finished.agents.claude.perm, 'read');
+  assert.equal(finished.terminalAssistant, true);
+  const calls = readFileSync(argsLog, 'utf8').trim().split('\n').map(JSON.parse);
+  const last = calls.at(-1);
+  assert.ok(last.includes('--tools'), 'advisory scope reaches the runtime, including normal chat sends');
+  assert.equal(last[last.indexOf('--tools') + 1], '');
+});
+
 test('the scanner reports what is installed and what can be driven', async () => {
   const { agents } = await (await api('/api/agents?fresh')).json();
   const claude = agents.find((a) => a.id === 'claude');

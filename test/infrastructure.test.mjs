@@ -80,11 +80,26 @@ async function stream(path) {
 }
 
 test('host and PTY routes require owner authentication', async () => {
-  for (const path of ['/api/hosts', '/api/hosts/local/stats', '/api/terminal/sessions']) {
+  for (const path of ['/api/hosts', '/api/hosts/local/stats', '/api/terminal/sessions', '/api/terminal/sessions/example/assistant']) {
     assert.equal((await fetch(base + path)).status, 401);
     assert.equal((await fetch(base + path, { headers: { Authorization: 'Bearer wrong' } })).status, 401);
   }
   assert.equal((await fetch(base + '/api/terminal/sessions', { method: 'POST', body: '{}' })).status, 401);
+  assert.equal((await fetch(base + '/api/terminal/sessions/example/assistant', { method: 'POST', body: '{}' })).status, 401);
+});
+
+test('opening terminal assistance creates no conversation or runtime work', async (t) => {
+  const { terminal } = await (await api('/api/terminal/sessions', 'POST', {})).json();
+  t.after(() => api(`/api/terminal/sessions/${terminal.id}`, 'DELETE'));
+  const result = await api(`/api/terminal/sessions/${terminal.id}/assistant`);
+  assert.equal(result.status, 200);
+  const body = await result.json();
+  assert.equal(body.session, null);
+  assert.ok(body.agents.every((agent) => !agent.ready && !agent.installed));
+  assert.equal(body.terminal.state, 'pending');
+  assert.equal((await api(`/api/terminal/sessions/${terminal.id}/assistant`, 'POST', { agents: ['codex'], text: 'Explain.' })).status, 409);
+  assert.equal((await (await api('/api/sessions')).json()).sessions.length, 0);
+  await api(`/api/terminal/sessions/${terminal.id}`, 'DELETE');
 });
 
 test('hosts can be saved, changed and removed; local and SSH argument boundaries are enforced', async () => {

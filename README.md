@@ -5,7 +5,7 @@ Talk to your agents in one place, browse the server, watch it, keep every decisi
 
 SpectraHub runs on a single small VPS. No SaaS, no telemetry, no external account required.
 
-> Status: **0.3.0, in active development.** It installs and runs; much of the command center
+> Status: **0.3.1, in active development.** It installs and runs; much of the command center
 > works, some is still missing — see [docs/ROADMAP.md](docs/ROADMAP.md). Not production-ready.
 
 ## What it does today
@@ -25,6 +25,9 @@ SpectraHub runs on a single small VPS. No SaaS, no telemetry, no external accoun
 - **GitHub and Gmail**, read only, with your own tokens or app passwords.
 - **Servers** — local and multiple SSH hosts, disk, memory, load, uptime and service status.
 - **Real terminals** — PTY, interactive programs, resize and control keys, after explicit shell approval.
+- **Agents beside the terminal** — choose available runtimes to explain output and propose
+  commands. Sharing visible terminal text is optional and previewed before sending to the
+  selected agents and their model providers. Prepare or copy a command; insertion never sends Enter.
 - **Recoverable conversations** — HTTP restarts reattach to the same worker, including pending
   approvals; interrupted work is never automatically executed a second time.
 
@@ -64,8 +67,10 @@ test/         `npm test`
 docs/         install, architecture, roadmap, decisions
 ```
 
-The repository holds the product only. Everything SpectraHub learns about a server — its agents,
-sign-ins, sessions, files and settings — stays on that server, in `~/.spectrahub`.
+The repository holds the product only. Installation state — agents, sign-ins, sessions,
+files and settings — is stored on the server in `~/.spectrahub` and excluded from the repository.
+Agent requests use the selected runtime's configured model provider; prompts and any explicitly
+shared terminal context are sent there. Helper conversations remain available in the chat history.
 
 ## License
 

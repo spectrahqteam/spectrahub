@@ -15,6 +15,8 @@ spectrahub doctor
 The terminal renderer is installed with npm and served locally. No CDN or browser
 connection to a third party is required. Agent runtimes are optional and installed
 separately; SpectraHub discovers them without copying your configuration.
+Version 0.3.1 adds terminal assistance using these existing runtimes and dependencies;
+it does not require another model service or an additional package.
 
 `init` creates `~/.spectrahub` and prints a one-time login link. Open that link to
 sign in. It expires after 15 minutes. The service listens on `127.0.0.1:8787`.
@@ -63,6 +65,27 @@ keys are refused. SSH runs with `BatchMode=yes` and `StrictHostKeyChecking=yes`.
 
 Optional service names on each host show their `systemctl is-active` status. The app
 does not install software or modify services as part of monitoring.
+
+## Ask agents for terminal help
+
+In an active terminal, open **Agenci**, select one or more ready runtimes and describe
+your task. Claude Code, Codex, OpenClaw and DeepSeek Harness appear when available on
+the SpectraHub server. Install and sign in to the runtimes you want to use first.
+
+**Dołącz widoczny wynik terminala** is off by default. If selected, inspect the exact
+preview; leave this option off if it contains anything you do not want to share. The question and
+that preview reach the selected runtimes and their configured model providers.
+
+Agents explain and propose commands in a dedicated read-only conversation. Its scope
+and local working directory cannot be changed through the ordinary chat controls.
+These are runtime permissions, not a separate operating-system sandbox. The same
+conversation remains in the normal chat history.
+
+Use **Przygotuj polecenie** to review a proposal in its own editor, or **Kopiuj** to
+copy it. **Wstaw bez Enter** accepts one line without control characters after you
+confirm that the terminal is waiting for a new shell command. Check that its current
+line is empty: insertion neither clears existing text nor presses Enter. Review the
+terminal line and execute it yourself. Multiline proposals can be copied for manual use.
 
 ## Conversation recovery
 
