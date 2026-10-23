@@ -8,8 +8,9 @@
 ## 0.2.0 — shell that runs (done)
 - [x] Node server serving `web/` + `/health`
 - [x] install path: `npm i -g`, `spectrahub init`, `spectrahub service install`
-- [x] smoke tests + CI on Node 20/22
-- [ ] SQLite bootstrap, owner account
+- [x] smoke tests (`npm test`)
+- [ ] CI workflow in the repository
+- [x] owner account: one token, one-time login links (state in files, see D7)
 
 ## 0.3.0 — terminal and chat
 - [x] read-only terminal: exact command allowlist, SSE stream, Ubuntu-like prompt, owner token
@@ -18,10 +19,12 @@
 - [x] "start sesja": pick agents, each gets a new runtime session, one shared conversation
 - [x] chat in the terminal window: `@agent` picks and keeps the recipient, `@all`, `/stop`, streamed replies
 - [x] live view of the work: every tool with its output and exit code, diffs, thinking, plan, tokens and cost
-- [ ] inline approval cards (TAK / NIE in the stream)
-- [ ] tabs, one session per tab, drafts kept per tab
-- [ ] runtime adapters: at least one working end-to-end
-- [ ] approval cards
+- [x] runtime adapters, all four end to end: Claude Code, Codex, OpenClaw, DeepSeek Harness
+- [x] approval cards in the chat for Claude Code: allow once, for this session, or deny; its questions with options
+- [ ] approval cards for the other runtimes (they offer no prompt protocol in the way SpectraHub runs them)
+- [x] permission level per agent and session; sign-in per agent (subscription, API key, automatic)
+- [x] drafts kept per session; polls answered by the agents
+- [ ] work survives a server restart (today a running reply is marked as interrupted)
 
 ## 0.4.0 — files
 - [ ] terminal session per host (PTY), commands beyond the read-only list behind approvals

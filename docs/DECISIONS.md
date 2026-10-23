@@ -23,3 +23,9 @@ a product rule, not a configuration option.
 ## D6 — UI names runtimes, never people
 Screens talk about Terminal, Chat, Servers, Files, GitHub — and about runtimes (Claude Code,
 Codex, OpenClaw, DSH). Personal names of team members never appear in the UI.
+
+## D7 — State in plain files, not SQLite (2026-10-23)
+Supersedes the storage half of D4. Sessions, projects and settings are JSON files under
+`~/.spectrahub` (written through a temporary file and renamed); credentials the owner connects
+(API keys, GitHub tokens, Gmail app passwords) sit next to them with mode 0600. Readable,
+easy to back up, no database to run. Still one Node process, no framework.

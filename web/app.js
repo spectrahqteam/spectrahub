@@ -1063,9 +1063,12 @@ async function openSession(id) {
   const res = await api(`/api/sessions/${id}`);
   if (!res.ok) { store.del(LAST); return showEmpty(); }
   const { session } = await res.json();
+  if (chat.s && chat.s.id !== session.id) keepDraft(chat.s.id, cInput.value);
   chat.s = session;
   chat.active = [Object.keys(session.agents)[0]];
   chat.files = [];
+  cInput.value = drafts()[session.id] ?? '';
+  autosize();
   store.set(LAST, id);
   setView('chat');
   renderLog(session);
@@ -1414,17 +1417,31 @@ async function sendLine() {
   const attachments = chat.files.map((f) => f.id);
   cInput.value = '';
   autosize();
+  keepDraft(chat.s.id, '');
   const res = await jpost(`/api/sessions/${chat.s.id}/send`, { to: chat.active, text, attachments });
   if (!res.ok) {
     const { error } = await res.json().catch(() => ({}));
     toast(error?.startsWith('busy') ? `jeszcze pracuje: ${error.slice(6)}` : `nie wysłano: ${error ?? res.status}`);
     cInput.value = raw;
     autosize();
+    keepDraft(chat.s.id, raw);
   } else { chat.files = []; renderAttachments(); }
   updateSend();
   toBottom();
 }
-cInput.addEventListener('input', () => { autosize(); updateSend(); });
+// A draft belongs to its session: switching sessions never carries a half-written message over,
+// and a reload keeps it. Kept in this browser only.
+const DRAFTS = 'spectrahub.drafts';
+function drafts() { try { return JSON.parse(store.get(DRAFTS) ?? '{}'); } catch { return {}; } }
+function keepDraft(id, text) {
+  if (!id) return;
+  const all = drafts();
+  if (text.trim()) all[id] = text; else delete all[id];
+  const ids = Object.keys(all);
+  for (const old of ids.slice(0, Math.max(0, ids.length - 50))) delete all[old];  // the 50 newest
+  store.set(DRAFTS, JSON.stringify(all));
+}
+cInput.addEventListener('input', () => { autosize(); updateSend(); keepDraft(chat.s?.id, cInput.value); });
 cInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && wide.matches) { e.preventDefault(); sendLine(); }
 });

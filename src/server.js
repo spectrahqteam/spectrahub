@@ -60,8 +60,13 @@ function send(res, code, body, type = 'text/plain; charset=utf-8') {
   res.end(body);
 }
 
+// A path with a broken %-escape is a bad request, never a crash.
+const decode = (s) => { try { return decodeURIComponent(s); } catch { return null; } };
+
 async function serveStatic(res, urlPath) {
-  const rel = urlPath === '/' ? 'index.html' : decodeURIComponent(urlPath).replace(/^\/+/, '');
+  const path = decode(urlPath);
+  if (path == null) return send(res, 400, 'bad request');
+  const rel = urlPath === '/' ? 'index.html' : path.replace(/^\/+/, '');
   const target = resolve(join(WEB, normalize(rel)));
   if (!target.startsWith(WEB + sep) && target !== WEB) return send(res, 403, 'forbidden');
   let file = target;
@@ -147,7 +152,9 @@ function readBody(req, limit = 4096) {
 //   /api/github/:acc/repos                        GET every repository the token sees
 //   /api/github/:acc/repo/:owner/:name[/:what]    GET details+README · contents · commits · pulls · issues · raw
 async function githubRoute(req, res, url, dir, json) {
-  const [acc, what, owner, name, sub] = url.pathname.split('/').slice(3).filter(Boolean).map(decodeURIComponent);
+  const parts = url.pathname.split('/').slice(3).filter(Boolean).map(decode);
+  if (parts.includes(null)) return send(res, 400, 'bad request');
+  const [acc, what, owner, name, sub] = parts;
   const q = url.searchParams;
   try {
     if (!acc && req.method === 'GET') return json(200, { accounts: github.accounts(dir) });
@@ -185,7 +192,9 @@ async function githubRoute(req, res, url, dir, json) {
 //   /api/gmail/:acc/messages?box=&before=&q=      GET newest first, a page at a time, or a Gmail search
 //   /api/gmail/:acc/message/:uid[/part/:id]?box=  GET one message · one attachment's bytes
 async function gmailRoute(req, res, url, dir, json) {
-  const [acc, what, uid, sub, pid] = url.pathname.split('/').slice(3).filter(Boolean).map(decodeURIComponent);
+  const parts = url.pathname.split('/').slice(3).filter(Boolean).map(decode);
+  if (parts.includes(null)) return send(res, 400, 'bad request');
+  const [acc, what, uid, sub, pid] = parts;
   const q = url.searchParams;
   const box = q.get('box') || 'INBOX';
   try {
@@ -440,26 +449,34 @@ async function sessionRoute(req, res, url, config, json) {
 }
 
 export function createServer(config) {
-  return httpCreateServer(async (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
-    if (url.pathname === '/health' || url.pathname === '/api/health') {
-      const payload = healthBody(config);
-      const wantsHtml = (req.headers.accept ?? '').includes('text/html');
-      if (wantsHtml && url.pathname === '/health') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-        return res.end(healthPage(payload));
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      return res.end(JSON.stringify(payload));
+  // One request's failure answers that request with 500; it never takes the server down.
+  return httpCreateServer((req, res) => handle(req, res, config).catch((err) => {
+    console.error(`spectrahub: ${req.method} ${String(req.url).slice(0, 200)}: ${err?.stack ?? err}`);
+    if (!res.headersSent) send(res, 500, 'server error');
+    else res.destroy();
+  }));
+}
+
+async function handle(req, res, config) {
+  let url;
+  try { url = new URL(req.url, 'http://localhost'); } catch { return send(res, 400, 'bad request'); }
+  if (url.pathname === '/health' || url.pathname === '/api/health') {
+    const payload = healthBody(config);
+    const wantsHtml = (req.headers.accept ?? '').includes('text/html');
+    if (wantsHtml && url.pathname === '/health') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(healthPage(payload));
     }
-    if (url.pathname === '/api/version') {
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
-    }
-    if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|github(\/|$)|gmail(\/|$)|fs\/(dirs|list|read|raw)$|agents\/\w+\/(files?|history)$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
-    if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
-    return serveStatic(res, url.pathname);
-  });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(payload));
+  }
+  if (url.pathname === '/api/version') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    return res.end(JSON.stringify({ product: 'spectrahub', version: VERSION }));
+  }
+  if (/^\/api\/(terminal\/|agents$|models$|runs$|settings$|system$|connections(\/|$)|github(\/|$)|gmail(\/|$)|fs\/(dirs|list|read|raw)$|agents\/\w+\/(files?|history)$|files\/recent$|projects(\/|$)|sessions(\/|$))/.test(url.pathname)) return terminalRoute(req, res, url, config);
+  if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'method not allowed');
+  return serveStatic(res, url.pathname);
 }
 
 export function start(config) {

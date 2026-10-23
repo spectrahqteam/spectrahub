@@ -14,7 +14,7 @@ const keyLog = join(dir, 'claude-key.log');
 const fakeClaude = `#!${process.execPath}
 const fs = require('fs');
 if (process.argv.includes('--version')) { console.log('9.9.9 (fake)'); process.exit(0); }
-if (process.argv.includes('--help')) { console.log('  --effort <level>  Effort level (low, medium, high, xhigh, max)'); process.exit(0); }
+if (process.argv.includes('--help')) { console.log('  --input-format <format>\\n  --permission-prompt-tool <tool>\\n  --effort <level>  Effort level (low, medium, high, xhigh, max)'); process.exit(0); }
 fs.appendFileSync(${JSON.stringify(argsLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 let buf = '';
@@ -227,6 +227,10 @@ test('adapters turn each runtime events into the same steps', async () => {
   assert.deepEqual(ds[1], { type: 'step', id: 'c1', kind: 'tool', name: 'bash', title: 'uptime' });
   assert.deepEqual(ds[2], { type: 'step-end', id: 'c1', ok: true, output: 'up 9 days' });
   assert.deepEqual(ds[3], { type: 'usage', input: 7, output: 2, context: null });
+  // Claude Code too old to ask: the message goes as plain text, nothing waits for answers
+  const oldArgs = adapters.claude.argv('r', false, { asks: false });
+  assert.ok(!oldArgs.includes('--input-format') && !oldArgs.includes('--permission-prompt-tool'));
+  assert.ok(adapters.claude.argv('r', false, {}).includes('--permission-prompt-tool'));
   // OpenClaw: steps read from its session file
   const oc = run('openclaw', [
     { type: 'message', id: 'x', message: { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: { path: '/etc/hostname' } }] } },
@@ -394,6 +398,11 @@ test('a poll: every agent picks an option and says why; the owner can vote too',
   const p = s.log.find((e) => e.poll);
   assert.match(readFileSync(join(dir, 'last-prompt.txt'), 'utf8'), /1\) Pierwszy\n2\) Drugi/);
   assert.deepEqual(p.poll.votes.claude, { option: 1, reason: 'Bo druga opcja jest prostsza.' });
+  const { readVote } = await import('../src/sessions.js');
+  const five = ['0–20%', '20–40%', '40–60%', '60–70%', '80–100%'];
+  assert.deepEqual(readVote('Zaczynam audyt.\nSprawdzam testy (42/42).\n\n**4**\nBo brakuje terminala.', five), { option: 3, reason: 'Bo brakuje terminala.' }, 'progress notes before the vote do not count');
+  assert.equal(readVote('Opcja 2: bo tak', five).option, 1);
+  assert.equal(readVote('nie wiem', five).option, null);
   assert.equal((await api(`/api/sessions/${session.id}/vote`, { method: 'POST', body: JSON.stringify({ n: p.n, option: 0 }) })).status, 200);
   s = (await (await api(`/api/sessions/${session.id}`)).json()).session;
   assert.equal(s.log.find((e) => e.poll).poll.votes.you.option, 0);

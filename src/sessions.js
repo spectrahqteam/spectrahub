@@ -2,7 +2,7 @@
 // session; before its turn it gets what the others said since it last spoke, so they work together.
 // Runs live on the server, not in the browser tab: closing the phone does not stop an agent.
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync, renameSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, normalize } from 'node:path';
 import { homedir } from 'node:os';
 import { claudeHas, codexLimits, PERMS, scan, turn, newRef } from './agents.js';
@@ -208,7 +208,9 @@ export function attachFile(config, id, { path, from = 'agent' }) {
   const s = load(config, id);
   if (!s) return { error: 'no such session', code: 404 };
   if (typeof path !== 'string' || !isAbsolute(path)) return { error: 'absolute path required', code: 400 };
-  if (SECRET.test(path)) return { error: 'refused: looks like a secret', code: 403 };
+  let real = path;
+  try { real = realpathSync(path); } catch { /* checked below */ }
+  if (SECRET.test(path) || SECRET.test(real)) return { error: 'refused: looks like a secret', code: 403 };  // a link to a secret too
   let st;
   try { st = statSync(path); } catch { return { error: 'no such file', code: 404 }; }
   if (!st.isFile()) return { error: 'not a file', code: 400 };
@@ -239,7 +241,7 @@ function writtenBy(command) {
 function namedIn(text) {
   return [...new Set([...String(text ?? '').matchAll(/(?:^|[\s`'"(\[])(\/(?:[\w.@+-]+\/)*[\w.@+-]+\.[A-Za-z0-9]{1,8})(?=$|[\s`'"),.:;\]])/gm)].map((m) => m[1]))];
 }
-export { writtenBy, namedIn };  // for tests
+export { writtenBy, namedIn, readVote };  // for tests
 
 // Keeps a file only if it was written while this turn ran: naming an old file does not attach it.
 function freshFile(path, since) {
@@ -338,12 +340,23 @@ function setState(s, agent, state) {
 // A poll: the question goes to the chosen agents, each answers with an option and why.
 const pollPrompt = (q, options) => `Ankieta od użytkownika: ${q}\nOpcje:\n${options.map((o, i) => `${i + 1}) ${o}`).join('\n')}\n\n`
   + 'Odpowiedz tak: w pierwszej linii sam numer wybranej opcji, w następnych 1–3 zdania, dlaczego.';
-function readVote(text, options) {
-  const t = String(text ?? '').trim();
-  const m = /^\D{0,12}?(\d{1,2})\b/.exec(t.split('\n')[0] ?? '');
-  let option = m ? Number(m[1]) - 1 : options.findIndex((o) => t.toLowerCase().startsWith(o.toLowerCase()));
-  if (!(option >= 0 && option < options.length)) option = null;
-  return { option, reason: t.split('\n').slice(1).join(' ').replace(/\s+/g, ' ').trim().slice(0, 400) || (option == null ? t.slice(0, 400) : '') };
+// The vote is in the agent's final words: the first line there that is an option's number
+// ("2", "**2**", "2)", "Opcja 2: …"), the reason after it. Progress notes before the final
+// answer (some agents report as they go) do not count; the whole reply is only a fallback.
+const VOTE_LINE = /^(?:\*\*)?(?:opcj[ai]\s*)?(\d{1,2})(?:\*\*)?(?:\s*[).:\-–—]\s*|\s*$)/i;
+function readVote(text, options, whole = '') {
+  for (const t of [text, whole]) {
+    const lines = String(t ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const i = lines.findIndex((l) => { const m = VOTE_LINE.exec(l); return m && Number(m[1]) >= 1 && Number(m[1]) <= options.length; });
+    if (i < 0) continue;
+    const option = Number(VOTE_LINE.exec(lines[i])[1]) - 1;
+    const rest = lines[i].replace(VOTE_LINE, '').trim();
+    const reason = [rest, ...lines.slice(i + 1)].filter(Boolean).join(' ') || lines.slice(0, i).join(' ');
+    return { option, reason: reason.replace(/\s+/g, ' ').slice(0, 400) };
+  }
+  const t = String(text || whole).trim();
+  const option = options.findIndex((o) => t.toLowerCase().startsWith(o.toLowerCase()));
+  return { option: option >= 0 ? option : null, reason: t.replace(/\s+/g, ' ').slice(0, 400) };
 }
 
 export async function send(config, id, { to, text, attachments = [], poll = null }) {
@@ -475,7 +488,8 @@ export async function send(config, id, { to, text, attachments = [], poll = null
           for (const i of reply.items) if (i.k === 'ask' && i.status === 'waiting') i.status = 'expired';
           reply.s = reply.s.trimEnd();
           if (mine.poll) {
-            mine.poll.votes[agent] = readVote(reply.s, mine.poll.options);
+            const final = [...reply.items].reverse().find((i) => i.k === 'text')?.s ?? reply.s;  // the last thing it said
+            mine.poll.votes[agent] = readVote(final, mine.poll.options, reply.s);
             publish(s.id, { type: 'poll', n: mine.n, poll: mine.poll });
           }
           reply.status = reply.error ? 'error' : 'done';

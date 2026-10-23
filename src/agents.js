@@ -165,6 +165,10 @@ async function doScan() {
     const version = launch ? run(launch.node, [launch.script, '--version'], 15000) : run(path, ['--version']);
     out.version = (await version).split('\n')[0].trim() || null;
     if (r.id === 'dsh' && launch?.cwd) out.agent = basename(launch.cwd).toLowerCase();
+    if (r.id === 'claude') {
+      const help = await run(path, ['--help'], 15000);
+      out.asks = /--input-format/.test(help) && /--permission-prompt-tool/.test(help);  // older Claude Code: plain text in, no prompts
+    }
     if (r.id === 'openclaw') {
       out.agent = await openclawAgent(path);
       if (!out.agent) { out.ready = false; out.note = 'nie podał swoich agentów'; }
@@ -317,7 +321,8 @@ export async function dshProfile(rt) {
 }
 async function dshModels(rt) {
   const prof = await dshProfile(rt);
-  const key = dshEnv(rt).DEEPSEEK_API_KEY ?? process.env.DEEPSEEK_API_KEY;
+  const deepseek = /deepseek/i.test(prof.provider ?? '');
+  const key = deepseek ? dshEnv(rt).DEEPSEEK_API_KEY ?? process.env.DEEPSEEK_API_KEY : null;  // another provider: its profile's model only
   let ids = [];
   if (key) {
     try {
@@ -330,7 +335,7 @@ async function dshModels(rt) {
     configurable: true,
     models: [{ id: '', label: 'domyślny agenta', efforts: DSH_EFFORTS }, ...ids.map((id) => ({ id, label: DSH_NAMES[id] ?? id, note: [id, id === prof.model ? 'model profilu' : ''].filter(Boolean).join(' · '), efforts: DSH_EFFORTS }))],
     defaultModel: prof.model, defaultEffort: prof.effort ?? 'high', effortLabel: 'reasoning',  // DeepSeek's own default when the profile names none
-    source: key ? 'API DeepSeek i profil DeepSeek Harness' : 'profil DeepSeek Harness',
+    source: key ? 'API DeepSeek i profil DeepSeek Harness' : `profil DeepSeek Harness (${prof.provider})`,
   };
 }
 function dshPatch(rt, model, effort) {
@@ -447,8 +452,8 @@ const CLAUDE_TOOLS = {
 const claude = {
   argv(ref, started, o = {}) {
     const perm = PERMS.includes(o.perm) ? o.perm : 'full';
-    return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-      '--permission-prompt-tool', 'stdio',  // anything outside the allowed tools is asked about in the chat
+    const asks = o.asks !== false;  // anything outside the allowed tools is asked about in the chat
+    return ['-p', ...(asks ? ['--input-format', 'stream-json', '--permission-prompt-tool', 'stdio'] : []), '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--permission-mode', perm === 'read' ? 'default' : 'acceptEdits',
       ...(o.model ? ['--model', o.model] : []), ...(o.effort ? ['--effort', o.effort] : []),
       ...(started ? ['--resume', ref] : ['--session-id', ref]),
@@ -647,7 +652,8 @@ const openclaw = {
       if (p.text) emit({ type: 'text', s: p.text.trimEnd(), block: true });
       // files the agent hands over (mediaUrl / mediaUrls): local ones become file cards in the chat
       for (const m of [p.mediaUrl, ...(Array.isArray(p.mediaUrls) ? p.mediaUrls : [])].filter(Boolean)) {
-        const path = String(m).startsWith('file://') ? decodeURIComponent(String(m).slice(7)) : String(m);
+        let path = String(m);
+        if (path.startsWith('file://')) { try { path = decodeURIComponent(path.slice(7)); } catch { continue; } }  // a broken link is skipped
         if (path.startsWith('/')) emit({ type: 'file', path });
       }
     }
@@ -728,7 +734,7 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
   if (rt.id === 'dsh') env.DSH_PERMISSION_MODE = { read: 'read-only', write: 'workspace-write', full: 'danger-full-access' }[perm] ?? 'workspace-write';
   if (rt.id === 'openclaw' && (perm === 'read' || perm === 'write')) Object.assign(env, openclawLimits(perm));
   for (const k of drop) delete env[k];  // e.g. an API key that must not override the subscription
-  const opts = { agent: rt.agent, file, model, effort, images, perm, patch: rt.id === 'dsh' && (model || effort) ? dshPatch(rt, model, effort) : null };
+  const opts = { agent: rt.agent, file, model, effort, images, perm, asks: rt.asks, patch: rt.id === 'dsh' && (model || effort) ? dshPatch(rt, model, effort) : null };
   const [bin, args] = l ? [l.node, [l.script, ...a.argv(ref, started, opts)]] : [rt.path, a.argv(ref, started, opts)];
   const child = spawn(bin, args, {
     cwd: ownCwd ? cwd : l?.cwd ?? cwd, env, stdio: [a.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
@@ -736,7 +742,8 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
   // Prompts the agent sends while it works wait here for the owner's answer.
   const asks = new Map();
   const write = (obj) => { if (!child.stdin.destroyed && child.stdin.writable) child.stdin.write(JSON.stringify(obj) + '\n'); };
-  if (a.stdin === 'json') write({ type: 'user', message: { role: 'user', content: prompt } });
+  const jsonIn = a.stdin === 'json' && rt.asks !== false;
+  if (jsonIn) write({ type: 'user', message: { role: 'user', content: prompt } });
   else if (a.stdin) child.stdin.end(prompt);
 
   // Live steps from a file the agent appends to while it works (OpenClaw).
@@ -772,7 +779,7 @@ export function turn(rt, { ref, started, prompt, cwd, model, effort, images, per
   const relay = (e) => {
     if (e.type === 'control-reply') return write({ type: 'control_response', response: { subtype: 'error', request_id: e.id, error: e.error } });
     if (e.type === 'ask') { asks.set(e.id, e); const { input: _i, suggestions: _s, ...shown } = e; return emit(shown); }
-    if (e.type === 'done') { if (a.stdin === 'json') child.stdin.end(); return finish(e); }
+    if (e.type === 'done') { if (jsonIn) child.stdin.end(); return finish(e); }
     return emit(e);
   };
   child.stdout.on('data', (chunk) => {

@@ -122,6 +122,8 @@ export function raw(path, { reveal = false } = {}) {
   try { st = statSync(p); } catch { throw new FsError(404, 'nie ma takiego pliku'); }
   if (!st.isFile()) throw new FsError(400, 'to nie jest zwykły plik');
   if (st.size > RAW_LIMIT) throw new FsError(413, 'plik większy niż 50 MB');
-  if (isSecret(p) && !reveal) throw new FsError(403, 'plik wygląda na sekret');
+  let target = p;
+  try { target = realpathSync(p); } catch { /* keep the path */ }
+  if ((isSecret(p) || isSecret(target)) && !reveal) throw new FsError(403, 'plik wygląda na sekret');  // a link to a secret is a secret
   try { return { name: basename(p), type: imageType(p), data: readFileSync(p) }; } catch { throw new FsError(403, 'brak dostępu'); }
 }

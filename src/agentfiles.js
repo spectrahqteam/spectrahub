@@ -33,7 +33,7 @@ function files(dir, test = () => true, depth = 1) {
 const md = (n) => /\.md$/i.test(n);
 const skill = (n) => n === 'SKILL.md';
 // The notes people keep next to an agent: identity and working files at the top of its folder.
-const IDENTITY = /^(AGENTS|AGENTS\.override|CLAUDE|CLAUDE\.local|GEMINI|SOUL|IDENTITY|USER|TOOLS|HEARTBEAT|BOOT|BOOTSTRAP|MEMORY|OPERATIONS|PERSONA|RULES|INSTRUCTIONS)\.md$/i;
+const IDENTITY = /^(AGENTS|AGENTS\.override|CLAUDE|CLAUDE\.local|GEMINI|SOUL|IDENTITY|USER|TOOLS|HEARTBEAT|BOOT|BOOTSTRAP|MEMORY|PERSONA|RULES|INSTRUCTIONS)\.md$/i;
 const tilde = (p, home) => (typeof p === 'string' ? (p === '~' ? home : p.startsWith('~/') ? join(home, p.slice(2)) : p) : null);
 
 // Every home on the server; the one SpectraHub runs as also honours the runtimes' env overrides.
